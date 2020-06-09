@@ -16,26 +16,28 @@ certificate(s). When TLStunnel is configured to do client authentication, only
 valid clients can access the backend service, limiting the attack surface
 drastically.
 
-## TODO
+## Installation from source
 
-- evaluate performance (and leakage) using ab / openssl s_client
-   (maybe find a way to test broken clients + broken backend as well?)
-- appropriate logging (new session from IP:PORT)
-- metrics (on a third network stack!?)
-  - total session count, active sessions, max sessions
-  - per-session bytes received + sent (++ total ++ avg)
-  - session info: TLS protocol, ciphersuite
-  - RTT (receive data from client, send to server, receive from server, sent to client)
-  - timing: TCP frontend connection established .. TLS handshake finished .. first data sent back to client .. session duration
-    -> is it worth to establish TCP backend while TLS handshake in progress?
-- client authentication (client certificate, with renegotiation to hide identity)
-- TLS server configuration:
-  - tls version, ciphersuite
-  - configure certificate origin (KV, DNS, seed) -- requires different libraries / data at runtime (KV vs no KV) <- should DNS-le-cert expose KV API? (code could then be the same, but still different link-time libraries (crunch vs dns-certify))
-  - multiple certificate chains (based on SNI, fanning out)
-- certificate via let's encrypt
-- haproxy support
-- redirect (HTTP 301) requests on port 80 ~> 443
-- timeouts (inactive sessions, TLS handshake timeout, TCP establishment timeouts)
-- backend connection pool (+ maximum frontend connections)
-- TLS session cache
+To install this unikernel from source, you need to have
+[opam](https://opam.ocaml.org) (>= 2.0.0) and
+[ocaml](https://ocaml.org) (>= 4.07.0) installed. Also,
+[mirage](https://mirageos.org) is required (>= 3.7.7). Please follow the
+[installation instructions](https://mirageos.org/wiki/install).
+
+The following steps will clone this git repository and compile the unikernel:
+
+```bash
+$ git clone https://github.com/roburio/tlstunnel.git
+$ mirage configure -t <your-favourite-target>
+$ make depend
+$ make
+```
+
+## Installing as binary
+
+There are not yet any binaries available, but work is underway to provide
+reproducible binaries.
+
+## Questions?
+
+Please open an issue if you have questions, feature requests, or comments.
