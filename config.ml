@@ -4,7 +4,7 @@ open Mirage
 
 let backend_ip =
   let doc = Key.Arg.info ~doc:"Backend IP address" ["backend-ip"] in
-  Key.(create "backend_ip" Arg.(opt ipv4_address Ipaddr.V4.localhost doc))
+  Key.(create "backend_ip" Arg.(opt ip_address Ipaddr.(V4 V4.localhost) doc))
 
 let backend_port =
   let doc = Key.Arg.info ~doc:"The TCP port of the backend." ["backend-port"] in
@@ -21,11 +21,11 @@ let main =
     ~keys:[ Key.abstract backend_ip ; Key.abstract backend_port ; Key.abstract frontend_port ]
     ~packages:[ package "tls-mirage" ]
     "Unikernel.Main"
-    (kv_ro @-> pclock @-> stackv4 @-> stackv4 @-> job)
+    (kv_ro @-> pclock @-> stackv4v6 @-> stackv4v6 @-> job)
 
-let stack = generic_stackv4 default_network
+let stack = generic_stackv4v6 default_network
 
-let stack2 = generic_stackv4 ~group:"private" (netif ~group:"private" "private")
+let stack2 = generic_stackv4v6 ~group:"private" (netif ~group:"private" "private")
 
 let () =
   register "tlstunnel"
