@@ -1,14 +1,39 @@
 (* (c) 2020 Hannes Mehnert, all rights reserved *)
 
 (* left to do:
-   - statistics (metrics)
    - haproxy1 support (PROXY TCP4|6 SOURCEIP DESTIP SRCPORT DESTPORT\r\n) at the beginning of the TCP connection to the backend
    - NG: apart from SNI allow other ports to be redirected (no proxy)
 *)
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
+module Main (C : Mirage_console.S) (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) (Management : Tcpip.Stack.V4V6) = struct
+  let snis =
+    Mirage_monitoring.counter_metrics ~f:(fun x -> x) "tlstunnel"
+
+  let access kind =
+    let s = ref (0, 0) in
+    let open Metrics in
+    let doc = "connection statistics" in
+    let data () =
+      Data.v [
+        int "active" (fst !s) ;
+        int "total" (snd !s) ;
+      ] in
+    let tags = Tags.string "kind" in
+    let src = Src.v ~doc ~tags:Tags.[ tags ] ~data "connections" in
+    (fun action ->
+       (match action with
+        | `Open -> s := (succ (fst !s), succ (snd !s))
+        | `Close -> s := (pred (fst !s), snd !s));
+       Metrics.add src (fun x -> x kind) (fun d -> d ()))
+
+  let frontend_access = access "frontend"
+  let tls_access = access "tls"
+  let config_access = access "config"
+  let http_access = access "http"
+  let backend_access = access "backend"
+
   module FS = Filesystem.Make(Pclock)(Block)
 
   type config = {
@@ -117,6 +142,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     | Some data -> handle_command block config data
 
   let config_change block config key tcp =
+    config_access `Open;
     (Private.TCP.read tcp >>= function
       | Error e ->
         Logs.err (fun m -> m "config TCP read error %a" Private.TCP.pp_error e);
@@ -140,6 +166,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
           Lwt.return_unit
         end)
     >>= fun () ->
+    config_access `Close;
     Private.TCP.close tcp
 
   module TLS = Tls_mirage.Make(Public.TCP)
@@ -179,6 +206,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       None
 
   let redirect tcp =
+    http_access `Open;
     Public.TCP.read tcp >>= fun data ->
     let reply = match data with
       | Error e ->
@@ -207,9 +235,13 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
        | Error e ->
          Logs.err (fun m -> m "error %a sending redirect" Public.TCP.pp_write_error e))
     >>= fun () ->
+    http_access `Close;
     Public.TCP.close tcp
 
   let close tls tcp =
+    tls_access `Close;
+    frontend_access `Close;
+    backend_access `Close;
     Private.TCP.close tcp >>= fun () ->
     TLS.close tls
 
@@ -244,13 +276,18 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
   let default_host = Domain_name.(host_exn (of_string_exn "default"))
 
   let tls_accept priv config tls_config tcp_flow =
+    frontend_access `Open;
     (* TODO this should timeout the TLS handshake with a reasonable timer *)
     TLS.server_of_flow tls_config tcp_flow >>= function
     | Error e ->
       Logs.warn (fun m -> m "TLS error %a" TLS.pp_write_error e);
+      frontend_access `Close;
       Public.TCP.close tcp_flow
     | Ok tls_flow ->
+      tls_access `Open;
       let close () =
+        tls_access `Close;
+        frontend_access `Close;
         TLS.close tls_flow >>= fun () ->
         Public.TCP.close tcp_flow
       in
@@ -263,7 +300,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
           match
             match epoch.Tls.Core.own_name with
             | None ->
-              Logs.warn (fun m -> m "no server name specified");
+              Metrics.add snis (fun x -> x) (fun d -> d "no sni");
               default ()
             | Some sni ->
               match Domain_name.Host_map.find_opt sni config.sni with
@@ -271,7 +308,10 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                 Logs.warn (fun m -> m "server name %a not configured"
                               Domain_name.pp sni);
                 default ()
-              | Some (host, port) -> Some (host, port)
+              | Some (host, port) ->
+                Metrics.add snis (fun x -> x)
+                  (fun d -> d (Domain_name.to_string sni));
+                Some (host, port)
           with
           | None -> close ()
           | Some (host, port) ->
@@ -281,6 +321,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                            Private.TCP.pp_error e);
               close ()
             | Ok tcp_flow ->
+              backend_access `Open;
               Lwt.pick [
                 read_tls_write_tcp tls_flow tcp_flow ;
                 read_tcp_write_tls tcp_flow tls_flow
@@ -293,8 +334,17 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
         close ()
 
   module D = Dns_certify_mirage.Make(R)(Pclock)(T)(Public)
+  module Monitoring = Mirage_monitoring.Make(T)(Pclock)(Management)
+  module Syslog = Logs_syslog_mirage.Udp(C)(Pclock)(Management)
 
-  let start _ () () block pub priv =
+  let start c _ () () block pub priv management =
+    let hostname = Key_gen.name () in
+    (match Key_gen.syslog () with
+     | None -> Logs.warn (fun m -> m "no syslog specified, dumping on stdout")
+     | Some ip -> Logs.set_reporter (Syslog.create c management ip ~hostname ()));
+    (match Key_gen.monitor () with
+     | None -> Logs.warn (fun m -> m "no monitor specified, not outputting statistics")
+     | Some ip -> Monitoring.create ~hostname ip management);
     read_configuration block >>= fun config ->
     Private.TCP.listen (Private.tcp priv) ~port:(Key_gen.configuration_port ())
       (config_change block config (Cstruct.of_string (Key_gen.key ())));
