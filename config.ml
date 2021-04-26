@@ -20,7 +20,7 @@ let dns_key =
 
 let dns_server =
   let doc = Key.Arg.info ~doc:"dns server IP" ["dns-server"] in
-  Key.(create "dns-server" Arg.(required ipv4_address doc))
+  Key.(create "dns-server" Arg.(required ip_address doc))
 
 let domains =
   let doc = Key.Arg.info ~doc:"domains" ["domains"] in
@@ -42,12 +42,12 @@ let main =
           ]
     ~packages:[
       package "tls-mirage" ;
-      package ~min:"4.6.3" ~sublibs:["mirage"] "dns-certify"
+      package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify"
     ]
     "Unikernel.Main"
-    (random @-> time @-> pclock @-> block @-> stackv4 @-> stackv4v6 @-> job)
+    (random @-> time @-> pclock @-> block @-> stackv4v6 @-> stackv4v6 @-> job)
 
-let stack = generic_stackv4 default_network
+let stack = generic_stackv4v6 default_network
 
 let private_stack =
   generic_stackv4v6 ~group:"private" (netif ~group:"private" "private")

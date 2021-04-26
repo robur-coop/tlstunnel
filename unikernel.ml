@@ -8,7 +8,7 @@
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Mirage_stack.V4) (Private : Mirage_stack.V4V6) = struct
+module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Mirage_stack.V4V6) (Private : Mirage_stack.V4V6) = struct
   module FS = Filesystem.Make(Pclock)(Block)
 
   module M = Map.Make(String)
@@ -127,7 +127,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     >>= fun () ->
     Private.TCP.close tcp
 
-  module TLS = Tls_mirage.Make(Public.TCPV4)
+  module TLS = Tls_mirage.Make(Public.TCP)
 
   let extract_location content =
     (* we assume a HTTP request in here, and want to reply with a moved
@@ -164,10 +164,10 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       None
 
   let redirect tcp =
-    Public.TCPV4.read tcp >>= fun data ->
+    Public.TCP.read tcp >>= fun data ->
     let reply = match data with
       | Error e ->
-        Logs.err (fun m -> m "TCP error %a" Public.TCPV4.pp_error e);
+        Logs.err (fun m -> m "TCP error %a" Public.TCP.pp_error e);
         None
       | Ok `Eof ->
         Logs.err (fun m -> m "TCP eof");
@@ -187,12 +187,12 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
          in
          String.concat "\r\n" [ status ; location ; content_len ; server ; "" ; "" ]
        in
-       Public.TCPV4.write tcp (Cstruct.of_string reply) >|= function
+       Public.TCP.write tcp (Cstruct.of_string reply) >|= function
        | Ok () -> ()
        | Error e ->
-         Logs.err (fun m -> m "error %a sending redirect" Public.TCPV4.pp_write_error e))
+         Logs.err (fun m -> m "error %a sending redirect" Public.TCP.pp_write_error e))
     >>= fun () ->
-    Public.TCPV4.close tcp
+    Public.TCP.close tcp
 
   let close tls tcp =
     Private.TCP.close tcp >>= fun () ->
@@ -231,7 +231,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     TLS.server_of_flow tls_config tcp_flow >>= function
     | Error e ->
       Logs.warn (fun m -> m "TLS error %a" TLS.pp_write_error e);
-      Public.TCPV4.close tcp_flow
+      Public.TCP.close tcp_flow
     | Ok tls_flow ->
       let close () =
         TLS.close tls_flow
@@ -280,7 +280,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     and dns_key = Key_gen.dns_key ()
     and dns_server = Key_gen.dns_server ()
     in
-    Public.listen_tcpv4 pub ~port:80 redirect;
+    Public.listen_tcp pub ~port:80 redirect;
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
           let key_seed = domain ^ ":" ^ key_seed in
@@ -289,8 +289,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
             ~additional_hostnames:[ Domain_name.of_string_exn ("*." ^ domain) ]
             ~key_seed dns_server 53 >>= function
           | Error `Msg err -> Lwt.fail_with err
-          | Ok `Single certificates -> Lwt.return (certificates :: acc)
-          | Ok _ -> assert false)
+          | Ok certificates -> Lwt.return (certificates :: acc))
         [] domains >>= fun cert_chains ->
       (match List.rev cert_chains with
        | [] -> Lwt.fail_with "empty certificate chains"
@@ -299,7 +298,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       let tls_config = Tls.Config.server ~certificates () in
       let priv_tcp = Private.tcp priv in
       let port = Key_gen.frontend_port () in
-      Public.listen_tcpv4 pub ~port (tls_accept priv_tcp config tls_config);
+      Public.listen_tcp pub ~port (tls_accept priv_tcp config tls_config);
       let now = Ptime.v (Pclock.now_d_ps ()) in
       let seven_days_before_expire =
         let next_expire =
