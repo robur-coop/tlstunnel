@@ -41,8 +41,8 @@ let main =
             Key.abstract key_seed ;
           ]
     ~packages:[
-      package "tls-mirage" ;
-      package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify"
+      package ~min:"0.13.1" "tls-mirage" ;
+      package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
     ]
     "Unikernel.Main"
     (random @-> time @-> pclock @-> block @-> stackv4v6 @-> stackv4v6 @-> job)
