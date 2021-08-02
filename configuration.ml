@@ -37,7 +37,7 @@ let data =
 let decode_strict codec cs =
   match Asn.decode codec cs with
   | Ok (a, cs) ->
-    if Cstruct.len cs = 0 then
+    if Cstruct.length cs = 0 then
       Ok a
     else
       Error (`Msg "trailing bytes")

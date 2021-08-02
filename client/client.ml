@@ -55,8 +55,8 @@ let write fd data =
         w b ~off:(written + off) (l - written)
     in
     let csl = Cstruct.create 8 in
-    Cstruct.BE.set_uint64 csl 0 (Int64.of_int (Cstruct.len data));
-    w (Cstruct.to_bytes (Cstruct.append csl data)) (Cstruct.len data + 8);
+    Cstruct.BE.set_uint64 csl 0 (Int64.of_int (Cstruct.length data));
+    w (Cstruct.to_bytes (Cstruct.append csl data)) (Cstruct.length data + 8);
     Ok ()
   with
     Unix.Unix_error (err, f, _) ->

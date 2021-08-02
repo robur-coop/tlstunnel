@@ -63,7 +63,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
 
   let decode_superblock buf : (superblock, [> decode_err ]) result =
     let payload, checksum =
-      Cstruct.split buf (Cstruct.len buf - H.digest_size)
+      Cstruct.split buf (Cstruct.length buf - H.digest_size)
     in
     if Cstruct.equal checksum (H.digest payload) then
       let super_version = Cstruct.BE.get_uint16 payload 0
@@ -91,7 +91,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     Cstruct.BE.set_uint64 buf 24 t.active_sector;
     Cstruct.BE.set_uint64 buf 32 (Int64.of_int t.data_length);
     Cstruct.blit t.data_checksum 0 buf 40 H.digest_size;
-    let eop = Cstruct.len buf - H.digest_size in
+    let eop = Cstruct.length buf - H.digest_size in
     let payload = Cstruct.sub buf 0 eop in
     let checksum = H.digest payload in
     Cstruct.blit checksum 0 buf eop H.digest_size
@@ -127,13 +127,13 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
        | _, Error b -> Error b) >>= fun (superblock, to_write) ->
     let scratch = Cstruct.create ss in
     let rec read_one sectors data sector =
-      match sector = 0L, Cstruct.len data = 0 with
+      match sector = 0L, Cstruct.length data = 0 with
       | true, true -> Lwt.return (Ok sectors)
       | false, false ->
         lwt_err_to_msg ~pp_error:Block.pp_error
           (Block.read block sector [ scratch ]) >>= fun () ->
         let next = Cstruct.BE.get_uint64 scratch 0 in
-        let len = min (Cstruct.len data) data_per_sector in
+        let len = min (Cstruct.length data) data_per_sector in
         Cstruct.blit scratch 8 data 0 len;
         read_one (IS.add sector sectors) (Cstruct.shift data len) next
       | true, false -> Lwt.return (Error (`Msg "early end of data"))
@@ -160,7 +160,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     in
     assert (ss >= superblock_size);
     let data_per_sector = ss - 8 in (* each sector is prefixed by a next pointer *)
-    let sectors_needed = (Cstruct.len data + (pred ss)) / data_per_sector in
+    let sectors_needed = (Cstruct.length data + (pred ss)) / data_per_sector in
     if 2 + sectors_needed + IS.cardinal old_superblock.used_sectors > Int64.to_int sectors then
       Lwt.return (Error (`Msg "not enough blocks"))
     else
@@ -176,12 +176,12 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
           Ok i
       in
       let rec write_one sector data acc =
-        (if Cstruct.len data <= data_per_sector then
+        (if Cstruct.length data <= data_per_sector then
            Lwt.return (Ok 0L)
          else
            Lwt_result.lift (is_free (Int64.succ sector))) >>= fun next ->
         Cstruct.BE.set_uint64 data_sector 0 next;
-        let len = min (Cstruct.len data) data_per_sector in
+        let len = min (Cstruct.length data) data_per_sector in
         Cstruct.blit data 0 data_sector 8 len;
         lwt_err_to_msg ~pp_error:Block.pp_write_error
           (Block.write block sector [ data_sector ]) >>= fun () ->
@@ -199,7 +199,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
           empty with
           super_counter = succ old_superblock.super_counter ;
           active_sector = first_sector ;
-          data_length = Cstruct.len data ;
+          data_length = Cstruct.length data ;
           data_checksum = H.digest data ;
           used_sectors ;
         }

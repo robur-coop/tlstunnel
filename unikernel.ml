@@ -38,7 +38,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                     superblock.FS.super_counter
                     superblock.FS.data_length);
       let config = { superblock ; sni = M.empty } in
-      if Cstruct.len data > 0 then begin
+      if Cstruct.length data > 0 then begin
         let sni = Configuration.decode_data data in
         config.sni <- sni;
       end;
@@ -87,7 +87,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
   module H = Mirage_crypto.Hash.SHA256
 
   let auth key data =
-    if Cstruct.len data > H.digest_size then
+    if Cstruct.length data > H.digest_size then
       let auth, data = Cstruct.split data H.digest_size in
       if Cstruct.equal (H.hmac ~key data) auth then
         Some data
@@ -112,10 +112,10 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       | Ok `Data buf ->
         let buf' = Cstruct.shift buf 8 in
         let l = Cstruct.BE.get_uint64 buf 0 in
-        if Cstruct.len buf' = Int64.to_int l then
+        if Cstruct.length buf' = Int64.to_int l then
           config_cmd block config key buf' >>= fun res ->
           let size = Cstruct.create 8 in
-          Cstruct.BE.set_uint64 size 0 (Int64.of_int (Cstruct.len res));
+          Cstruct.BE.set_uint64 size 0 (Int64.of_int (Cstruct.length res));
           Private.TCP.write tcp (Cstruct.append size res) >|= function
           | Ok () -> ()
           | Error e ->
