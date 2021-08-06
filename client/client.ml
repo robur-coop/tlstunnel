@@ -124,9 +124,19 @@ let key =
   let doc = "The shared secret" in
   Arg.(value & opt string "" & info [ "key" ] ~doc ~docv:"KEY")
 
+let hn : [`host] Domain_name.t Arg.converter =
+  let parse s =
+    match Domain_name.of_string s with
+    | Error `Msg m -> `Error m
+    | Ok d -> match Domain_name.host d with
+      | Error `Msg m -> `Error m
+      | Ok h -> `Ok h
+  in
+  parse, Domain_name.pp
+
 let sni =
   let doc = "The SNI." in
-  Arg.(required & pos 0 (some string) None & info [ ] ~doc ~docv:"SNI")
+  Arg.(required & pos 0 (some hn) None & info [ ] ~doc ~docv:"SNI")
 
 let setup_log =
   Term.(const setup_log

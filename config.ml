@@ -41,7 +41,7 @@ let main =
             Key.abstract key_seed ;
           ]
     ~packages:[
-      package ~min:"0.13.1" "tls-mirage" ;
+      package ~min:"0.14.0" "tls-mirage" ;
       package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
       package ~min:"6.0.0" "cstruct" ;
     ]

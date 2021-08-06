@@ -11,18 +11,17 @@ open Lwt.Infix
 module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Mirage_stack.V4V6) (Private : Mirage_stack.V4V6) = struct
   module FS = Filesystem.Make(Pclock)(Block)
 
-  module M = Map.Make(String)
-
   type config = {
     mutable superblock : FS.superblock ;
-    mutable sni : (Ipaddr.t * int) M.t ;
+    mutable sni : (Ipaddr.t * int) Domain_name.Host_map.t ;
   }
 
   let read_configuration block =
     FS.read_data block >>= function
     | Error `Bad_checksum ->
       (FS.init block >>= function
-        | Ok superblock -> Lwt.return { superblock ; sni = M.empty }
+        | Ok superblock ->
+          Lwt.return { superblock ; sni = Domain_name.Host_map.empty }
         | Error `Msg e ->
           Logs.err (fun m -> m "error initializing the block device %s" e);
           Lwt.fail_with "initializing block device")
@@ -37,12 +36,13 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                     (Ptime.pp_rfc3339 ()) superblock.FS.timestamp
                     superblock.FS.super_counter
                     superblock.FS.data_length);
-      let config = { superblock ; sni = M.empty } in
+      let config = { superblock ; sni = Domain_name.Host_map.empty } in
       if Cstruct.length data > 0 then begin
         let sni = Configuration.decode_data data in
         config.sni <- sni;
       end;
-      Logs.info (fun m -> m "SNI map has %d entries" (M.cardinal config.sni));
+      Logs.info (fun m -> m "SNI map has %d entries"
+                    (Domain_name.Host_map.cardinal config.sni));
       Lwt.return config
 
   let write_configuration block config =
@@ -58,20 +58,35 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
         let snis = Configuration.add_sni config.sni (sni, host, port) in
         config.sni <- snis;
         write_configuration block config >|= function
-        | Ok () -> Configuration.Result (0, sni ^ " was successfully added")
-        | Error `Msg m -> Configuration.Result (1, "error " ^ m ^ " adding " ^ sni)
+        | Ok () ->
+          let msg =
+            Format.asprintf "%a was successfully added" Domain_name.pp sni
+          in
+          Configuration.Result (0, msg)
+        | Error `Msg m ->
+          let msg = Format.asprintf "error %s adding %a" m Domain_name.pp sni in
+          Configuration.Result (1, msg)
       end
     | Configuration.Remove sni ->
       begin
         let snis = Configuration.remove_sni config.sni sni in
         config.sni <- snis;
         write_configuration block config >|= function
-        | Ok () -> Configuration.Result (0, sni ^ " was successfully removed")
-        | Error `Msg m -> Configuration.Result (1, "error " ^ m ^ " removing " ^ sni)
+        | Ok () ->
+          let msg =
+            Format.asprintf "%a was successfylly removed" Domain_name.pp sni
+          in
+          Configuration.Result (0, msg)
+        | Error `Msg m ->
+          let msg =
+            Format.asprintf "error %s removing %a" m Domain_name.pp sni
+          in
+          Configuration.Result (1, msg)
       end
     | Configuration.List ->
       let snis =
-        M.fold (fun sni (host, port) acc -> (sni, host, port) :: acc)
+        Domain_name.Host_map.fold
+          (fun sni (host, port) acc -> (sni, host, port) :: acc)
           config.sni []
       in
       Lwt.return (Configuration.Snis snis)
@@ -226,6 +241,8 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       | Ok () ->
         read_tcp_write_tls tcp tls
 
+  let default_host = Domain_name.(host_exn (of_string_exn "default"))
+
   let tls_accept priv config tls_config tcp_flow =
     (* TODO this should timeout the TLS handshake with a reasonable timer *)
     TLS.server_of_flow tls_config tcp_flow >>= function
@@ -239,16 +256,19 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       match TLS.epoch tls_flow with
       | Ok epoch ->
         begin
-          let default () = M.find_opt "default" config.sni in
+          let default () =
+            Domain_name.Host_map.find_opt default_host config.sni
+          in
           match
             match epoch.Tls.Core.own_name with
             | None ->
               Logs.warn (fun m -> m "no server name specified");
               default ()
             | Some sni ->
-              match M.find_opt sni config.sni with
+              match Domain_name.Host_map.find_opt sni config.sni with
               | None ->
-                Logs.warn (fun m -> m "server name %s not configured" sni);
+                Logs.warn (fun m -> m "server name %a not configured"
+                              Domain_name.pp sni);
                 default ()
               | Some (host, port) -> Some (host, port)
           with
