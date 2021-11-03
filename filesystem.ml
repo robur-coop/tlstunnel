@@ -73,10 +73,10 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
       and data_length = Cstruct.BE.get_uint64 payload 32
       and data_checksum = Cstruct.sub payload 40 H.digest_size
       in
-      let open Rresult.R.Infix in
+      let ( let* ) = Result.bind in
       if super_version = s_version then
-        safe_int ~msg:"superblock counter" super_counter >>= fun super_counter ->
-        safe_int ~msg:"data length" data_length >>= fun data_length ->
+        let* super_counter = safe_int ~msg:"superblock counter" super_counter in
+        let* data_length = safe_int ~msg:"data length" data_length in
         Ok { super_version ; super_counter ; timestamp ; active_sector ;
              data_length ; data_checksum ; used_sectors = IS.empty }
       else
@@ -98,7 +98,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
 
   let lwt_err_to_msg ~pp_error f =
     let open Lwt.Infix in
-    f >|= Rresult.R.error_to_msg ~pp_error
+    f >|= Result.map_error (fun e -> `Msg (Fmt.to_to_string pp_error e))
 
   let read_data block =
     let open Lwt.Infix in

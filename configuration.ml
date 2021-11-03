@@ -100,7 +100,7 @@ let pp_cmd ppf = function
   | Add (s, h, p) -> Fmt.pf ppf "adding %a" pp_one (s, h, p)
   | Remove sni -> Fmt.pf ppf "removing %a" Domain_name.pp sni
   | List -> Fmt.string ppf "list"
-  | Snis xs -> Fmt.(list ~sep:(unit ";@ ") pp_one) ppf xs
+  | Snis xs -> Fmt.(list ~sep:(any ";@ ") pp_one) ppf xs
   | Result (c, msg) -> Fmt.pf ppf "exited %d: %s" c msg
 
 let cmd =

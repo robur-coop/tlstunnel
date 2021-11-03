@@ -1,4 +1,4 @@
-open Rresult.R.Infix
+let ( let* ) = Result.bind
 
 let rec ign_intr f v =
   try f v with Unix.Unix_error (Unix.EINTR, _, _) -> ign_intr f v
@@ -30,11 +30,11 @@ let read fd =
           r b ~off:(read + off) (l - read)
     in
     let bl = Bytes.create 8 in
-    r bl 8 >>= fun () ->
+    let* () = r bl 8 in
     let l = Cstruct.BE.get_uint64 (Cstruct.of_bytes bl) 0 in
     let l_int = Int64.to_int l in (* TODO *)
     let b = Bytes.create l_int in
-    r b l_int >>= fun () ->
+    let* () = r b l_int in
     Ok (Cstruct.of_bytes b)
   with
     Unix.Unix_error (err, f, _) ->
@@ -42,7 +42,7 @@ let read fd =
     Error (`Msg "unix error in read")
 
 let read_cmd fd =
-  read fd >>= fun data ->
+  let* data = read fd in
   Configuration.cmd_of_cs data
 
 let write fd data =
@@ -71,11 +71,12 @@ let write_cmd fd key cmd =
   write fd (Cstruct.append auth data)
 
 let write_read_print key remote cmd =
-  connect remote >>= fun s ->
-  write_cmd s key cmd >>= fun () ->
-  read_cmd s >>| fun cmd ->
+  let* s = connect remote in
+  let* () = write_cmd s key cmd in
+  let* cmd = read_cmd s in
   Unix.close s;
-  Logs.app (fun m -> m "result: %a" Configuration.pp_cmd cmd)
+  Logs.app (fun m -> m "result: %a" Configuration.pp_cmd cmd);
+  Ok ()
 
 let list () key remote =
   write_read_print key remote Configuration.List
