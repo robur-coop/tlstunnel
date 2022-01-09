@@ -8,7 +8,7 @@
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Mirage_stack.V4V6) (Private : Mirage_stack.V4V6) = struct
+module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
   module FS = Filesystem.Make(Pclock)(Block)
 
   type config = {
@@ -293,14 +293,14 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
 
   let start _ () () block pub priv =
     read_configuration block >>= fun config ->
-    Private.listen_tcp priv ~port:(Key_gen.configuration_port ())
+    Private.TCP.listen (Private.tcp priv) ~port:(Key_gen.configuration_port ())
       (config_change block config (Cstruct.of_string (Key_gen.key ())));
     let domains = Key_gen.domains ()
     and key_seed = Key_gen.key_seed ()
     and dns_key = Key_gen.dns_key ()
     and dns_server = Key_gen.dns_server ()
     in
-    Public.listen_tcp pub ~port:80 redirect;
+    Public.TCP.listen (Public.tcp pub) ~port:80 redirect;
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
           let key_seed = domain ^ ":" ^ key_seed in
@@ -318,7 +318,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       let tls_config = Tls.Config.server ~certificates () in
       let priv_tcp = Private.tcp priv in
       let port = Key_gen.frontend_port () in
-      Public.listen_tcp pub ~port (tls_accept priv_tcp config tls_config);
+      Public.TCP.listen (Public.tcp pub) ~port (tls_accept priv_tcp config tls_config);
       let now = Ptime.v (Pclock.now_d_ps ()) in
       let seven_days_before_expire =
         let next_expire =
