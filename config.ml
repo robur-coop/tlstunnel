@@ -32,13 +32,13 @@ let key_seed =
 
 let main =
   foreign
-    ~keys:[ Key.abstract frontend_port ;
-            Key.abstract key ;
-            Key.abstract configuration_port ;
-            Key.abstract dns_key ;
-            Key.abstract dns_server ;
-            Key.abstract domains ;
-            Key.abstract key_seed ;
+    ~keys:[ Key.v frontend_port ;
+            Key.v key ;
+            Key.v configuration_port ;
+            Key.v dns_key ;
+            Key.v dns_server ;
+            Key.v domains ;
+            Key.v key_seed ;
           ]
     ~packages:[
       package ~min:"0.14.0" "tls-mirage" ;
