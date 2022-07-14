@@ -102,7 +102,7 @@ let setup_log style_renderer level =
 
 open Cmdliner
 
-let host_port : (Unix.inet_addr * int) Arg.converter =
+let host_port : (Unix.inet_addr * int) Arg.conv =
   let parse s =
     match String.split_on_char ':' s with
     | [ hostname ;  port ] ->
@@ -125,7 +125,7 @@ let key =
   let doc = "The shared secret" in
   Arg.(value & opt string "" & info [ "key" ] ~doc ~docv:"KEY")
 
-let hn : [`host] Domain_name.t Arg.converter =
+let hn : [`host] Domain_name.t Arg.conv =
   let parse s =
     match Domain_name.of_string s with
     | Error `Msg m -> `Error m
@@ -145,10 +145,10 @@ let setup_log =
         $ Logs_cli.level ())
 
 let list_cmd =
-  Term.(term_result (const list $ setup_log $ key $ remote)),
-  Term.info "list"
+  let term = Term.(term_result (const list $ setup_log $ key $ remote)) in
+  Cmd.(v (info "list") term)
 
-let ip_conv : Ipaddr.t Arg.converter =
+let ip_conv : Ipaddr.t Arg.conv =
   let parse s =
     match Ipaddr.of_string  s with
     | Ok ip -> `Ok ip
@@ -165,18 +165,25 @@ let port =
   Arg.(required & pos 2 (some int) None & info [] ~doc ~docv:"PORT")
 
 let add_cmd =
-  Term.(term_result (const add $ setup_log $ key $ remote $ sni $ ip $ port)),
-  Term.info "add"
+  let term = Term.(
+    term_result
+      (const add $ setup_log $ key $ remote $ sni $ ip $ port)) in
+  Cmd.(v (info "add") term)
 
 let remove_cmd =
-  Term.(term_result (const remove $ setup_log $ key $ remote $ sni)),
-  Term.info "remove"
+  let term = Term.(
+    term_result (const remove $ setup_log $ key $ remote $ sni)) in
+  Cmd.(v (info "remove") term)
 
-let help_cmd =
+let help_cmd, help_info =
   let doc = "Tlstunnel configuration client" in
-  Term.(ret (const help $ setup_log $ Term.man_format $ Term.choice_names $ Term.pure None)),
-  Term.info "tlstunnel-client" ~doc
+  Term.(ret (const help $ setup_log $ Arg.man_format $ Term.choice_names $ Term.const None)),
+  Cmd.info "tlstunnel-client" ~doc
 
-let cmds = [ help_cmd ; list_cmd ; add_cmd ; remove_cmd ]
+let cmds = [ Cmd.v help_info help_cmd; list_cmd ; add_cmd ; remove_cmd ]
 
-let () = match Term.eval_choice help_cmd cmds with `Ok () -> exit 0 | _ -> exit 1
+let () =
+  Cmd.group ~default:help_cmd help_info cmds
+  |> Cmd.eval
+  |> exit
+
