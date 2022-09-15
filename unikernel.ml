@@ -332,7 +332,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
           let closest_span = List.hd (List.sort Ptime.Span.compare diffs) in
           fst (Ptime.Span.to_d_ps closest_span)
         in
-        max (Duration.of_hour 1) (Duration.of_day (next_expire - 7))
+        max (Duration.of_hour 1) (Duration.of_day (max 0 (next_expire - 7)))
       in
       T.sleep_ns seven_days_before_expire >>= fun () ->
       retrieve_certs ()
