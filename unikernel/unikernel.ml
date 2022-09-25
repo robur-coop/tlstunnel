@@ -251,7 +251,8 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       Public.TCP.close tcp_flow
     | Ok tls_flow ->
       let close () =
-        TLS.close tls_flow
+        TLS.close tls_flow >>= fun () ->
+        Public.TCP.close tcp_flow
       in
       match TLS.epoch tls_flow with
       | Ok epoch ->
@@ -280,10 +281,12 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                            Private.TCP.pp_error e);
               close ()
             | Ok tcp_flow ->
-              Lwt.join [
+              Lwt.pick [
                 read_tls_write_tcp tls_flow tcp_flow ;
                 read_tcp_write_tls tcp_flow tls_flow
-              ]
+              ] >>= fun () ->
+              close () >>= fun () ->
+              Private.TCP.close tcp_flow
         end
       | Error () ->
         Logs.warn (fun m -> m "unexpected error retrieving the TLS session");
