@@ -7,9 +7,33 @@
 
 open Lwt.Infix
 
-module Main (C : Mirage_console.S) (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) (Management : Tcpip.Stack.V4V6) = struct
+module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
   let snis =
-    Mirage_monitoring.counter_metrics ~f:(fun x -> x) "tlstunnel"
+    let create ~f =
+      let data : (string, int) Hashtbl.t = Hashtbl.create 7 in
+      (fun x ->
+         let key = f x in
+         let cur = match Hashtbl.find_opt data key with
+           | None -> 0
+           | Some x -> x
+         in
+         Hashtbl.replace data key (succ cur)),
+      (fun () ->
+         let data, total =
+           Hashtbl.fold (fun key value (acc, total) ->
+               (Metrics.uint key value :: acc), value + total)
+             data ([], 0)
+         in
+         Metrics.uint "total" total :: data)
+    in
+    let src =
+      let open Metrics in
+      let doc = "Counter metrics" in
+      let incr, get = create ~f:Fun.id in
+      let data thing = incr thing; Data.v (get ()) in
+      Src.v ~doc ~tags:Metrics.Tags.[] ~data "tlstunnel"
+    in
+    (fun r -> Metrics.add src (fun x -> x) (fun d -> d r))
 
   let access kind =
     let s = ref (0, 0) in
@@ -300,7 +324,7 @@ module Main (C : Mirage_console.S) (R : Mirage_random.S) (T : Mirage_time.S) (Pc
           match
             match epoch.Tls.Core.own_name with
             | None ->
-              Metrics.add snis (fun x -> x) (fun d -> d "no sni");
+              snis "no sni";
               default ()
             | Some sni ->
               match Domain_name.Host_map.find_opt sni config.sni with
@@ -309,8 +333,7 @@ module Main (C : Mirage_console.S) (R : Mirage_random.S) (T : Mirage_time.S) (Pc
                               Domain_name.pp sni);
                 default ()
               | Some (host, port) ->
-                Metrics.add snis (fun x -> x)
-                  (fun d -> d (Domain_name.to_string sni));
+                snis (Domain_name.to_string sni);
                 Some (host, port)
           with
           | None -> close ()
@@ -334,17 +357,8 @@ module Main (C : Mirage_console.S) (R : Mirage_random.S) (T : Mirage_time.S) (Pc
         close ()
 
   module D = Dns_certify_mirage.Make(R)(Pclock)(T)(Public)
-  module Monitoring = Mirage_monitoring.Make(T)(Pclock)(Management)
-  module Syslog = Logs_syslog_mirage.Udp(C)(Pclock)(Management)
 
-  let start c _ () () block pub priv management =
-    let hostname = Key_gen.name () in
-    (match Key_gen.syslog () with
-     | None -> Logs.warn (fun m -> m "no syslog specified, dumping on stdout")
-     | Some ip -> Logs.set_reporter (Syslog.create c management ip ~hostname ()));
-    (match Key_gen.monitor () with
-     | None -> Logs.warn (fun m -> m "no monitor specified, not outputting statistics")
-     | Some ip -> Monitoring.create ~hostname ip management);
+  let start _ () () block pub priv =
     read_configuration block >>= fun config ->
     Private.TCP.listen (Private.tcp priv) ~port:(Key_gen.configuration_port ())
       (config_change block config (Cstruct.of_string (Key_gen.key ())));
