@@ -1,7 +1,6 @@
 (* (c) 2020 Hannes Mehnert, all rights reserved *)
 
 (* left to do:
-   - statistics (metrics)
    - haproxy1 support (PROXY TCP4|6 SOURCEIP DESTIP SRCPORT DESTPORT\r\n) at the beginning of the TCP connection to the backend
    - NG: apart from SNI allow other ports to be redirected (no proxy)
 *)
@@ -9,6 +8,56 @@
 open Lwt.Infix
 
 module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
+  let snis =
+    let create ~f =
+      let data : (string, int) Hashtbl.t = Hashtbl.create 7 in
+      (fun x ->
+         let key = f x in
+         let cur = match Hashtbl.find_opt data key with
+           | None -> 0
+           | Some x -> x
+         in
+         Hashtbl.replace data key (succ cur)),
+      (fun () ->
+         let data, total =
+           Hashtbl.fold (fun key value (acc, total) ->
+               (Metrics.uint key value :: acc), value + total)
+             data ([], 0)
+         in
+         Metrics.uint "total" total :: data)
+    in
+    let src =
+      let open Metrics in
+      let doc = "Counter metrics" in
+      let incr, get = create ~f:Fun.id in
+      let data thing = incr thing; Data.v (get ()) in
+      Src.v ~doc ~tags:Metrics.Tags.[] ~data "tlstunnel"
+    in
+    (fun r -> Metrics.add src (fun x -> x) (fun d -> d r))
+
+  let access kind =
+    let s = ref (0, 0) in
+    let open Metrics in
+    let doc = "connection statistics" in
+    let data () =
+      Data.v [
+        int "active" (fst !s) ;
+        int "total" (snd !s) ;
+      ] in
+    let tags = Tags.string "kind" in
+    let src = Src.v ~doc ~tags:Tags.[ tags ] ~data "connections" in
+    (fun action ->
+       (match action with
+        | `Open -> s := (succ (fst !s), succ (snd !s))
+        | `Close -> s := (pred (fst !s), snd !s));
+       Metrics.add src (fun x -> x kind) (fun d -> d ()))
+
+  let frontend_access = access "frontend"
+  let tls_access = access "tls"
+  let config_access = access "config"
+  let http_access = access "http"
+  let backend_access = access "backend"
+
   module FS = Filesystem.Make(Pclock)(Block)
 
   type config = {
@@ -117,6 +166,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     | Some data -> handle_command block config data
 
   let config_change block config key tcp =
+    config_access `Open;
     (Private.TCP.read tcp >>= function
       | Error e ->
         Logs.err (fun m -> m "config TCP read error %a" Private.TCP.pp_error e);
@@ -140,6 +190,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
           Lwt.return_unit
         end)
     >>= fun () ->
+    config_access `Close;
     Private.TCP.close tcp
 
   module TLS = Tls_mirage.Make(Public.TCP)
@@ -179,6 +230,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       None
 
   let redirect tcp =
+    http_access `Open;
     Public.TCP.read tcp >>= fun data ->
     let reply = match data with
       | Error e ->
@@ -207,9 +259,13 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
        | Error e ->
          Logs.err (fun m -> m "error %a sending redirect" Public.TCP.pp_write_error e))
     >>= fun () ->
+    http_access `Close;
     Public.TCP.close tcp
 
   let close tls tcp =
+    tls_access `Close;
+    frontend_access `Close;
+    backend_access `Close;
     Private.TCP.close tcp >>= fun () ->
     TLS.close tls
 
@@ -244,13 +300,18 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
   let default_host = Domain_name.(host_exn (of_string_exn "default"))
 
   let tls_accept priv config tls_config tcp_flow =
+    frontend_access `Open;
     (* TODO this should timeout the TLS handshake with a reasonable timer *)
     TLS.server_of_flow tls_config tcp_flow >>= function
     | Error e ->
       Logs.warn (fun m -> m "TLS error %a" TLS.pp_write_error e);
+      frontend_access `Close;
       Public.TCP.close tcp_flow
     | Ok tls_flow ->
+      tls_access `Open;
       let close () =
+        tls_access `Close;
+        frontend_access `Close;
         TLS.close tls_flow >>= fun () ->
         Public.TCP.close tcp_flow
       in
@@ -263,7 +324,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
           match
             match epoch.Tls.Core.own_name with
             | None ->
-              Logs.warn (fun m -> m "no server name specified");
+              snis "no sni";
               default ()
             | Some sni ->
               match Domain_name.Host_map.find_opt sni config.sni with
@@ -271,7 +332,9 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                 Logs.warn (fun m -> m "server name %a not configured"
                               Domain_name.pp sni);
                 default ()
-              | Some (host, port) -> Some (host, port)
+              | Some (host, port) ->
+                snis (Domain_name.to_string sni);
+                Some (host, port)
           with
           | None -> close ()
           | Some (host, port) ->
@@ -281,6 +344,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                            Private.TCP.pp_error e);
               close ()
             | Ok tcp_flow ->
+              backend_access `Open;
               Lwt.pick [
                 read_tls_write_tcp tls_flow tcp_flow ;
                 read_tcp_write_tls tcp_flow tls_flow
