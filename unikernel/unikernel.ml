@@ -218,7 +218,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
               let host = String.concat ":" host_els in
               let loc = ["https://" ; String.trim host ; url ] in
               Some (String.concat "" loc)
-            | None ->
+            | _ ->
               Logs.warn (fun m -> m "no name in host header %S" host);
               None
           end
