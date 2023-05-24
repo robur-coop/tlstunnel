@@ -202,20 +202,21 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
        So we decode the incoming read data for
        (a) "HTTP method" "URL" (anything else)
        (b) "Host:" <data> header *)
-    match Astring.String.cuts ~sep:"\r\n" content with
+    match List.map String.trim (String.split_on_char '\n' content) with
     | request :: headers ->
       begin
         match
-          Astring.String.cuts ~sep:" " request,
+          String.split_on_char ' ' request,
           List.find_opt (fun x ->
-              Astring.String.is_prefix ~affix:"host:"
-                (Astring.String.Ascii.lowercase x))
+              String.length x >= 5 &&
+              String.sub (String.lowercase_ascii x) 0 5 = "host:")
             headers
         with
         | _method :: url :: _, Some host ->
-          begin match Astring.String.cut ~sep:":" host with
-            | Some (_, host) ->
-              let loc = ["https://" ; Astring.String.trim host ; url ] in
+          begin match String.split_on_char ':' host with
+            | _hdr :: host_els ->
+              let host = String.concat ":" host_els in
+              let loc = ["https://" ; String.trim host ; url ] in
               Some (String.concat "" loc)
             | None ->
               Logs.warn (fun m -> m "no name in host header %S" host);
