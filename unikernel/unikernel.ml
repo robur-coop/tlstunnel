@@ -334,15 +334,17 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
               snis "no sni";
               default (), "no sni"
             | Some sni ->
-              let txt = Domain_name.to_string sni in
-              match Domain_name.Host_map.find_opt sni config.sni with
-              | None ->
-                Logs.warn (fun m -> m "server name %a not configured"
-                              Domain_name.pp sni);
-                default (), txt
-              | Some (host, port) ->
-                snis (Domain_name.to_string sni);
-                Some (host, port), txt
+              let r =
+                match Domain_name.Host_map.find_opt sni config.sni with
+                | None ->
+                  Logs.warn (fun m -> m "server name %a not configured"
+                                Domain_name.pp sni);
+                  default ()
+                | Some (host, port) ->
+                  snis (Domain_name.to_string sni);
+                  Some (host, port)
+              in
+              r, Domain_name.to_string sni
           in
           match sni with
           | None ->
