@@ -230,6 +230,16 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       Logs.warn (fun m -> m "no http header found in %S" content);
       None
 
+  let http_reply ?(body = "") ?(headers = []) ~status_code status =
+    let status = Printf.sprintf "HTTP/1.1 %u %s" status_code status
+    and headers =
+      "Server: OCaml TLStunnel" ::
+      Printf.sprintf "Content-Length: %u" (String.length body) ::
+      (if body = "" then [] else [ "Content-Type: text/plain; charset=utf-8" ]) @
+      headers
+    in
+    String.concat "\r\n" (status :: headers @ [ "" ; body ])
+
   let redirect tcp =
     http_access `Open;
     Public.TCP.read tcp >>= fun data ->
@@ -248,12 +258,8 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
      | None -> Lwt.return_unit
      | Some data ->
        let reply =
-         let status = "HTTP/1.1 301 Moved permanently"
-         and location = "Location: " ^ data
-         and content_len = "Content-Length: 0"
-         and server = "Server: OCaml TLStunnel"
-         in
-         String.concat "\r\n" [ status ; location ; content_len ; server ; "" ; "" ]
+         http_reply ~headers:[ "Location: " ^ data ] ~status_code:301
+           "Moved permanently"
        in
        Public.TCP.write tcp (Cstruct.of_string reply) >|= function
        | Ok () -> ()
@@ -319,30 +325,47 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       match TLS.epoch tls_flow with
       | Ok epoch ->
         begin
-          let default () =
-            Domain_name.Host_map.find_opt default_host config.sni
-          in
-          match
+          let sni, sni_text =
+            let default () =
+              Domain_name.Host_map.find_opt default_host config.sni
+            in
             match epoch.Tls.Core.own_name with
             | None ->
               snis "no sni";
-              default ()
+              default (), "no sni"
             | Some sni ->
-              match Domain_name.Host_map.find_opt sni config.sni with
-              | None ->
-                Logs.warn (fun m -> m "server name %a not configured"
-                              Domain_name.pp sni);
-                default ()
-              | Some (host, port) ->
-                snis (Domain_name.to_string sni);
-                Some (host, port)
-          with
-          | None -> close ()
+              let r =
+                match Domain_name.Host_map.find_opt sni config.sni with
+                | None ->
+                  Logs.warn (fun m -> m "server name %a not configured"
+                                Domain_name.pp sni);
+                  default ()
+                | Some (host, port) ->
+                  snis (Domain_name.to_string sni);
+                  Some (host, port)
+              in
+              r, Domain_name.to_string sni
+          in
+          match sni with
+          | None ->
+            let reply =
+              http_reply
+                ~body:("Couldn't figure which service you want ('" ^ sni_text ^ "'), and no default is configured")
+                ~status_code:404 "Not Found"
+            in
+            TLS.write tls_flow (Cstruct.of_string reply) >>= fun _ ->
+            close ()
           | Some (host, port) ->
             Private.TCP.create_connection priv (host, port) >>= function
             | Error e ->
               Logs.err (fun m -> m "error %a connecting to backend"
                            Private.TCP.pp_error e);
+              let reply =
+                http_reply
+                  ~body:("Couldn't connect to backend service for '" ^ sni_text ^ "', please come back later")
+                  ~status_code:500 "Internal Server Error"
+              in
+              TLS.write tls_flow (Cstruct.of_string reply) >>= fun _ ->
               close ()
             | Ok tcp_flow ->
               backend_access `Open;
