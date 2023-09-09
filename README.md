@@ -27,7 +27,7 @@ To install this unikernel from source, you need to have
 The following steps will clone this git repository and compile the unikernel:
 
 ```bash
-$ git clone https://github.com/roburio/tlstunnel.git
+$ git clone https://github.com/robur-coop/tlstunnel.git
 $ cd unikernel && mirage configure -t <your-favourite-target>
 $ make depend
 $ mirage build
