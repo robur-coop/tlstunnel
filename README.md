@@ -28,7 +28,7 @@ The following steps will clone this git repository and compile the unikernel:
 
 ```bash
 $ git clone https://github.com/robur-coop/tlstunnel.git
-$ cd unikernel && mirage configure -t <your-favourite-target>
+$ cd tlstunnel/unikernel && mirage configure -t <your-favourite-target>
 $ make depend
 $ mirage build
 ```
