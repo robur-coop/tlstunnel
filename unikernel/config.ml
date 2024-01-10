@@ -46,6 +46,7 @@ let main =
       package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
       package ~min:"6.0.0" "cstruct" ;
       package ~min:"7.0.0" "tcpip" ;
+      package "metrics";
     ]
     "Unikernel.Main"
     (random @-> time @-> pclock @-> block @-> stackv4v6 @-> stackv4v6 @-> job)
