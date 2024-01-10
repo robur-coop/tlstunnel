@@ -7,7 +7,7 @@
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
+module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) (KEYS : Mirage_kv.RO) = struct
   let snis =
     let create ~f =
       let data : (string, int) Hashtbl.t = Hashtbl.create 7 in
@@ -380,53 +380,41 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
         Logs.warn (fun m -> m "unexpected error retrieving the TLS session");
         close ()
 
-  module D = Dns_certify_mirage.Make(R)(Pclock)(T)(Public)
+  module X509KV = Tls_mirage.X509(KEYS)(Pclock)
 
-  let start _ () () block pub priv =
+  let tls_from_kv kv =
+    Lwt.catch
+      (fun () ->
+         Logs.info (fun m -> m "now reading certificates from KV");
+         X509KV.certificate kv `Default >|= fun certs ->
+         Logs.info (fun m -> m "read certificates from KV");
+         Ok certs)
+      (fun e ->
+         Logs.info (fun m -> m "failed to read certificates from KV %s"
+                       (Printexc.to_string e));
+         Lwt.return (Error ()))
+
+  let start _ () () block pub priv keys =
     read_configuration block >>= fun config ->
     Private.TCP.listen (Private.tcp priv) ~port:(Key_gen.configuration_port ())
       (config_change block config (Cstruct.of_string (Key_gen.key ())));
-    let domains = Key_gen.domains ()
-    and key_seed = Key_gen.key_seed ()
-    and dns_key = Key_gen.dns_key ()
-    and dns_server = Key_gen.dns_server ()
-    in
     Public.TCP.listen (Public.tcp pub) ~port:80 redirect;
-    let rec retrieve_certs () =
-      Lwt_list.fold_left_s (fun acc domain ->
-          let key_seed = domain ^ ":" ^ key_seed in
-          D.retrieve_certificate pub ~dns_key
-            ~hostname:Domain_name.(host_exn (of_string_exn domain))
-            ~additional_hostnames:[ Domain_name.of_string_exn ("*." ^ domain) ]
-            ~key_seed dns_server 53 >>= function
-          | Error `Msg err -> Lwt.fail_with err
-          | Ok certificates -> Lwt.return (certificates :: acc))
-        [] domains >>= fun cert_chains ->
-      (match List.rev cert_chains with
-       | [] -> Lwt.fail_with "empty certificate chains"
-       | a :: _ -> Lwt.return a) >>= fun first ->
-      let certificates = `Multiple_default (first, cert_chains) in
-      let tls_config = Tls.Config.server ~certificates () in
-      let priv_tcp = Private.tcp priv in
-      let port = Key_gen.frontend_port () in
-      Public.TCP.listen (Public.tcp pub) ~port (tls_accept priv_tcp config tls_config);
-      let now = Ptime.v (Pclock.now_d_ps ()) in
-      let seven_days_before_expire =
-        let next_expire =
-          let expiring =
-            List.map snd
-              (List.map X509.Certificate.validity
-                 (List.map (function (s::_, _) -> s | _ -> assert false)
-                      cert_chains))
-          in
-          let diffs = List.map (fun exp -> Ptime.diff exp now) expiring in
-          let closest_span = List.hd (List.sort Ptime.Span.compare diffs) in
-          fst (Ptime.Span.to_d_ps closest_span)
-        in
-        max (Duration.of_hour 1) (Duration.of_day (max 0 (next_expire - 7)))
-      in
-      T.sleep_ns seven_days_before_expire >>= fun () ->
-      retrieve_certs ()
-    in
-    retrieve_certs ()
+    (tls_from_kv keys >|= function
+      | Ok (server :: chain, priv) ->
+        let until = snd (X509.Certificate.validity server) in
+        let now = Ptime.v (Pclock.now_d_ps ()) in
+        let good = Ptime.is_later ~than:now until in
+        Logs.info (fun m -> m "certificate valid until %a, good %B"
+                      (Ptime.pp_rfc3339 ()) until good);
+        if good then
+          `Single (server :: chain, priv)
+        else
+          failwith "certificate not good"
+      | Ok ([], _) -> failwith "empty certificate chain"
+      | Error () -> failwith "error while getting certificates") >>= fun certificates ->
+    let tls_config = Tls.Config.server ~certificates () in
+    let priv_tcp = Private.tcp priv in
+    let port = Key_gen.frontend_port () in
+    Public.TCP.listen (Public.tcp pub) ~port (tls_accept priv_tcp config tls_config);
+    fst (Lwt.task ())
 end

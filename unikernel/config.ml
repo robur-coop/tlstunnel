@@ -15,41 +15,23 @@ let configuration_port =
   let doc = Key.Arg.info ~doc:"The TCP port for configuration." ["configuration-port"] in
   Key.(create "configuration_port" Arg.(opt int 1234 doc))
 
-let dns_key =
-  let doc = Key.Arg.info ~doc:"nsupdate key (name:type:value,...)" ["dns-key"] in
-  Key.(create "dns-key" Arg.(required string doc))
-
-let dns_server =
-  let doc = Key.Arg.info ~doc:"dns server IP" ["dns-server"] in
-  Key.(create "dns-server" Arg.(required ip_address doc))
-
-let domains =
-  let doc = Key.Arg.info ~doc:"domains" ["domains"] in
-  Key.(create "domains" Arg.(required (list string) doc))
-
-let key_seed =
-  let doc = Key.Arg.info ~doc:"certificate key seed" ["key-seed"] in
-  Key.(create "key-seed" Arg.(required string doc))
+let certs_key = Key.(value @@ kv_ro ~group:"certs" ())
+let certs = generic_kv_ro ~key:certs_key "tls"
 
 let main =
   foreign
     ~keys:[ Key.v frontend_port ;
             Key.v key ;
             Key.v configuration_port ;
-            Key.v dns_key ;
-            Key.v dns_server ;
-            Key.v domains ;
-            Key.v key_seed ;
           ]
     ~packages:[
       package ~min:"0.14.0" "tls-mirage" ;
-      package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
       package ~min:"6.0.0" "cstruct" ;
       package ~min:"7.0.0" "tcpip" ;
       package "metrics";
     ]
     "Unikernel.Main"
-    (random @-> time @-> pclock @-> block @-> stackv4v6 @-> stackv4v6 @-> job)
+    (random @-> time @-> pclock @-> block @-> stackv4v6 @-> stackv4v6 @-> kv_ro @-> job)
 
 (* uTCP *)
 
@@ -183,5 +165,5 @@ let () =
     [
       optional_syslog default_posix_clock management_stack ;
       optional_monitoring default_time default_posix_clock management_stack ;
-      main $ default_random $ default_time $ default_posix_clock $ block $ stack $ private_stack
+      main $ default_random $ default_time $ default_posix_clock $ block $ stack $ private_stack $ certs
     ]
