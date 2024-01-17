@@ -5,6 +5,65 @@
    - NG: apart from SNI allow other ports to be redirected (no proxy)
 *)
 
+module K = struct
+  open Cmdliner
+
+  let ip =
+    Arg.conv ~docv:"IP" (Ipaddr.of_string, Ipaddr.pp)
+
+  let host =
+    Arg.conv ~docv:"HOSTNAME"
+      ((fun s -> Result.bind (Domain_name.of_string s) Domain_name.host),
+       Domain_name.pp)
+
+  let frontend_port =
+    let doc = Arg.info ~doc:"The TCP port of the frontend." ["frontend-port"] in
+    Arg.(value & opt int 443 doc)
+
+  let key =
+    let doc = Arg.info ~doc:"The shared secret" ["key"] in
+    Arg.(required & opt (some string) None doc)
+
+  let configuration_port =
+    let doc = Arg.info ~doc:"The TCP port for configuration." ["configuration-port"] in
+    Arg.(value & opt int 1234 doc)
+
+  let dns_key =
+    let doc = Arg.info ~doc:"nsupdate key (name:type:value,...)" ["dns-key"] in
+    Arg.(required & opt (some string) None doc)
+
+  let dns_server =
+    let doc = Arg.info ~doc:"dns server IP" ["dns-server"] in
+    Arg.(required & opt (some ip) None doc)
+
+  let domains =
+    let doc = Arg.info ~doc:"domains" ["domains"] in
+    Arg.(value & opt_all host [] doc)
+
+  let key_seed =
+    let doc = Arg.info ~doc:"certificate key seed" ["key-seed"] in
+    Arg.(required & opt (some string) None doc)
+
+  type t = {
+      frontend_port: int;
+      key: string;
+      configuration_port: int;
+      dns_key: string;
+      dns_server: Ipaddr.t;
+      domains: [ `host ] Domain_name.t list;
+      key_seed: string;
+    }
+
+  let setup =
+    Term.(const
+      (fun frontend_port key configuration_port dns_key dns_server
+           domains key_seed ->
+        { frontend_port; key; configuration_port; dns_key; dns_server; domains;
+          key_seed})
+      $ frontend_port $ key $ configuration_port $ dns_key $ dns_server $ domains
+      $ key_seed)
+end
+
 open Lwt.Infix
 
 module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
@@ -382,22 +441,20 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
 
   module D = Dns_certify_mirage.Make(R)(Pclock)(T)(Public)
 
-  let start _ () () block pub priv =
+  let start _ () () block pub priv
+        { K.frontend_port; key; configuration_port; dns_key; dns_server; domains;
+          key_seed}
+    =
     read_configuration block >>= fun config ->
-    Private.TCP.listen (Private.tcp priv) ~port:(Key_gen.configuration_port ())
-      (config_change block config (Cstruct.of_string (Key_gen.key ())));
-    let domains = Key_gen.domains ()
-    and key_seed = Key_gen.key_seed ()
-    and dns_key = Key_gen.dns_key ()
-    and dns_server = Key_gen.dns_server ()
-    in
+    Private.TCP.listen (Private.tcp priv) ~port:configuration_port
+      (config_change block config (Cstruct.of_string key));
     Public.TCP.listen (Public.tcp pub) ~port:80 redirect;
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
-          let key_seed = domain ^ ":" ^ key_seed in
+          let key_seed = Domain_name.to_string domain ^ ":" ^ key_seed in
           D.retrieve_certificate pub ~dns_key
-            ~hostname:Domain_name.(host_exn (of_string_exn domain))
-            ~additional_hostnames:[ Domain_name.of_string_exn ("*." ^ domain) ]
+            ~hostname:domain
+            ~additional_hostnames:[ Domain_name.(append_exn (of_string_exn "*") domain) ]
             ~key_seed dns_server 53 >>= function
           | Error `Msg err -> Lwt.fail_with err
           | Ok certificates -> Lwt.return (certificates :: acc))
@@ -408,8 +465,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       let certificates = `Multiple_default (first, cert_chains) in
       let tls_config = Tls.Config.server ~certificates () in
       let priv_tcp = Private.tcp priv in
-      let port = Key_gen.frontend_port () in
-      Public.TCP.listen (Public.tcp pub) ~port (tls_accept priv_tcp config tls_config);
+      Public.TCP.listen (Public.tcp pub) ~port:frontend_port (tls_accept priv_tcp config tls_config);
       let now = Ptime.v (Pclock.now_d_ps ()) in
       let seven_days_before_expire =
         let next_expire =
