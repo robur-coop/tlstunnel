@@ -8,13 +8,13 @@
 module K = struct
   open Cmdliner
 
-  let ip =
-    Arg.conv ~docv:"IP" (Ipaddr.of_string, Ipaddr.pp)
-
   let host =
     Arg.conv ~docv:"HOSTNAME"
       ((fun s -> Result.bind (Domain_name.of_string s) Domain_name.host),
        Domain_name.pp)
+
+  let key_v =
+    Arg.conv ~docv:"HOST:HASH:DATA" Dns.Dnskey.(name_key_of_string, pp_name_key)
 
   let frontend_port =
     let doc = Arg.info ~doc:"The TCP port of the frontend." ["frontend-port"] in
@@ -29,12 +29,12 @@ module K = struct
     Arg.(value & opt int 1234 doc)
 
   let dns_key =
-    let doc = Arg.info ~doc:"nsupdate key (name:type:value,...)" ["dns-key"] in
-    Arg.(required & opt (some string) None doc)
+    let doc = Arg.info ~doc:"nsupdate key" ["dns-key"] in
+    Arg.(required & opt (some key_v) None doc)
 
   let dns_server =
     let doc = Arg.info ~doc:"dns server IP" ["dns-server"] in
-    Arg.(required & opt (some ip) None doc)
+    Arg.(required & opt (some Mirage_runtime_network.Arg.ip_address) None doc)
 
   let domains =
     let doc = Arg.info ~doc:"domains" ["domains"] in
@@ -48,7 +48,7 @@ module K = struct
       frontend_port: int;
       key: string;
       configuration_port: int;
-      dns_key: string;
+      dns_key: [ `raw ] Domain_name.t * Dns.Dnskey.t;
       dns_server: Ipaddr.t;
       domains: [ `host ] Domain_name.t list;
       key_seed: string;
@@ -452,7 +452,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
           let key_seed = Domain_name.to_string domain ^ ":" ^ key_seed in
-          D.retrieve_certificate pub ~dns_key
+          D.retrieve_certificate pub ~dns_key:(Fmt.to_to_string Dns.Dnskey.pp_name_key dns_key)
             ~hostname:domain
             ~additional_hostnames:[ Domain_name.(append_exn (of_string_exn "*") domain) ]
             ~key_seed dns_server 53 >>= function
