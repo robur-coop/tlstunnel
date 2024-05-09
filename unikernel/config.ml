@@ -3,11 +3,11 @@
 
 open Mirage
 
-let setup = runtime_key ~pos:__POS__ "Unikernel.K.setup"
+let setup = runtime_arg ~pos:__POS__ "Unikernel.K.setup"
 
 let main =
   main
-    ~runtime_keys:[setup]
+    ~runtime_args:[setup]
     ~packages:[
       package ~min:"0.14.0" "tls-mirage" ;
       package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
