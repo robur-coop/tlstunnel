@@ -422,7 +422,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
               let reply =
                 http_reply
                   ~body:("Couldn't connect to backend service for '" ^ sni_text ^ "', please come back later")
-                  ~status_code:500 "Internal Server Error"
+                  ~status_code:502 "Bad gateway"
               in
               TLS.write tls_flow (Cstruct.of_string reply) >>= fun _ ->
               close ()
