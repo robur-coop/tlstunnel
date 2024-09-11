@@ -1,5 +1,5 @@
 module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
-  module H = Mirage_crypto.Hash.SHA256
+  module H = Digestif.SHA256
 
   let s_version = 1
 
@@ -12,9 +12,9 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     timestamp : Ptime.t ; (* 8 byte *)
     active_sector : int64 ; (* 8 byte *)
     data_length : int ; (* 8 byte *)
-    data_checksum : Cstruct.t ;
+    data_checksum : string ;
     (* padding until length - 32 *)
-    (* superblock_checksum : Cstruct.t ; *)
+    (* superblock_checksum : string ; *)
     used_sectors : IS.t ; (* not persistent *)
   }
 
@@ -26,7 +26,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     timestamp = Ptime.v (Pclock.now_d_ps ()) ;
     active_sector = 0L ;
     data_length = 0 ;
-    data_checksum = Cstruct.empty ;
+    data_checksum = "" ;
     used_sectors = IS.empty ;
   }
 
@@ -34,7 +34,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
   let ps_per_ns = 1_000L
 
   let decode_timestamp data off =
-    let ns = Cstruct.BE.get_uint64 data off in
+    let ns = String.get_int64_be data off in
     let d = Int64.unsigned_div ns ns_per_day
     and ps = Int64.(mul (unsigned_rem ns ns_per_day) ps_per_ns)
     in
@@ -43,7 +43,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
   let encode_timestamp data off v =
     let d, ps = Ptime.Span.to_d_ps (Ptime.to_span v) in
     let ns = Int64.(add (mul (Int64.of_int d) ns_per_day) (div ps ps_per_ns)) in
-    Cstruct.BE.set_uint64 data off ns
+    Bytes.set_int64_be data off ns
 
   let safe_int ~msg d =
     if d > Int64.of_int max_int then
@@ -63,15 +63,16 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
 
   let decode_superblock buf : (superblock, [> decode_err ]) result =
     let payload, checksum =
-      Cstruct.split buf (Cstruct.length buf - H.digest_size)
+      let mid = String.length buf - H.digest_size in
+      String.sub buf 0 mid, String.sub buf mid H.digest_size
     in
-    if Cstruct.equal checksum (H.digest payload) then
-      let super_version = Cstruct.BE.get_uint16 payload 0
-      and super_counter = Cstruct.BE.get_uint64 payload 8
+    if String.equal checksum H.(to_raw_string (digest_string payload)) then
+      let super_version = String.get_uint16_be payload 0
+      and super_counter = String.get_int64_be payload 8
       and timestamp = decode_timestamp payload 16
-      and active_sector = Cstruct.BE.get_uint64 payload 24
-      and data_length = Cstruct.BE.get_uint64 payload 32
-      and data_checksum = Cstruct.sub payload 40 H.digest_size
+      and active_sector = String.get_int64_be payload 24
+      and data_length = String.get_int64_be payload 32
+      and data_checksum = String.sub payload 40 H.digest_size
       in
       let ( let* ) = Result.bind in
       if super_version = s_version then
@@ -85,16 +86,16 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
       Error `Bad_checksum
 
   let encode_superblock t buf =
-    Cstruct.BE.set_uint16 buf 0 t.super_version;
-    Cstruct.BE.set_uint64 buf 8 (Int64.of_int t.super_counter);
+    Bytes.set_uint16_be buf 0 t.super_version;
+    Bytes.set_int64_be buf 8 (Int64.of_int t.super_counter);
     encode_timestamp buf 16 t.timestamp;
-    Cstruct.BE.set_uint64 buf 24 t.active_sector;
-    Cstruct.BE.set_uint64 buf 32 (Int64.of_int t.data_length);
-    Cstruct.blit t.data_checksum 0 buf 40 H.digest_size;
-    let eop = Cstruct.length buf - H.digest_size in
-    let payload = Cstruct.sub buf 0 eop in
-    let checksum = H.digest payload in
-    Cstruct.blit checksum 0 buf eop H.digest_size
+    Bytes.set_int64_be buf 24 t.active_sector;
+    Bytes.set_int64_be buf 32 (Int64.of_int t.data_length);
+    Bytes.blit_string t.data_checksum 0 buf 40 H.digest_size;
+    let eop = Bytes.length buf - H.digest_size in
+    let payload = Bytes.sub_string buf 0 eop in
+    let checksum = H.(to_raw_string (digest_string payload)) in
+    Bytes.blit_string checksum 0 buf eop H.digest_size
 
   let lwt_err_to_msg ~pp_error f =
     let open Lwt.Infix in
@@ -114,7 +115,9 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     lwt_err_to_msg ~pp_error:Block.pp_error
       (Block.read block last_super [ super_data_last ]) >>= fun () ->
     Lwt_result.lift
-      (match decode_superblock super_data_first, decode_superblock super_data_last with
+      (match decode_superblock (Cstruct.to_string super_data_first),
+             decode_superblock (Cstruct.to_string super_data_last)
+       with
        | Ok a, Ok b ->
          (match compare a.super_counter b.super_counter with
           | 0 -> Ok (a, None)
@@ -141,7 +144,8 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     in
     let data = Cstruct.create superblock.data_length in
     read_one IS.empty data superblock.active_sector >>= fun used_sectors ->
-    if Cstruct.equal superblock.data_checksum (H.digest data) then
+    let data = Cstruct.to_string data in
+    if String.equal superblock.data_checksum H.(to_raw_string (digest_string data)) then
       (match to_write with
        | None -> Lwt.return (Ok ())
        | Some (idx, d) ->
@@ -159,6 +163,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     and sectors = info.Mirage_block.size_sectors
     in
     assert (ss >= superblock_size);
+    let data = Cstruct.of_string data in
     let data_per_sector = ss - 8 in (* each sector is prefixed by a next pointer *)
     let sectors_needed = (Cstruct.length data + (pred ss)) / data_per_sector in
     if 2 + sectors_needed + IS.cardinal old_superblock.used_sectors > Int64.to_int sectors then
@@ -200,12 +205,13 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
           super_counter = succ old_superblock.super_counter ;
           active_sector = first_sector ;
           data_length = Cstruct.length data ;
-          data_checksum = H.digest data ;
+          data_checksum = H.(to_raw_string (digest_string (Cstruct.to_string data))) ;
           used_sectors ;
         }
       in
-      let s = Cstruct.create ss in
+      let s = Bytes.create ss in
       encode_superblock superblock s;
+      let s = Cstruct.of_bytes s in
       lwt_err_to_msg ~pp_error:Block.pp_write_error
         (Block.write block (Int64.pred sectors) [ s ]) >>= fun () ->
       lwt_err_to_msg ~pp_error:Block.pp_write_error
@@ -216,15 +222,16 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
     let open Lwt.Infix in
     let superblock =
       let empty = empty_superblock () in
-      { empty with data_checksum = H.digest Cstruct.empty }
+      { empty with data_checksum = H.(to_raw_string (digest_string "")) }
     in
     Block.get_info block >>= fun info ->
     let ss = info.Mirage_block.sector_size in
     assert (ss >= superblock_size);
-    let s = Cstruct.create ss in
+    let s = Bytes.create ss in
     encode_superblock superblock s;
     let last_sector = Int64.pred info.Mirage_block.size_sectors in
     let open Lwt_result.Infix in
+    let s = Cstruct.of_bytes s in
     lwt_err_to_msg ~pp_error:Block.pp_write_error
       (Block.write block last_sector [ s ]) >>= fun () ->
     lwt_err_to_msg ~pp_error:Block.pp_write_error

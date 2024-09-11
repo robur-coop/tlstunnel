@@ -40,8 +40,8 @@ let data =
 
 let decode_strict codec cs =
   match Asn.decode codec cs with
-  | Ok (a, cs) ->
-    if Cstruct.length cs = 0 then
+  | Ok (a, rest) ->
+    if String.length rest = 0 then
       Ok a
     else
       Error (`Msg "trailing bytes")
@@ -127,4 +127,4 @@ let cmd =
                              (required ~label:"exit" int)
                              (required ~label:"message" utf8_string)))))
 
-let cmd_of_cs, cmd_to_cs = projections_of cmd
+let cmd_of_str, cmd_to_str = projections_of cmd
