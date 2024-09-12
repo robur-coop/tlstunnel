@@ -66,7 +66,7 @@ end
 
 open Lwt.Infix
 
-module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
+module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
   let snis =
     let create ~f =
       let data : (string, int) Hashtbl.t = Hashtbl.create 7 in
@@ -145,7 +145,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
                     superblock.FS.super_counter
                     superblock.FS.data_length);
       let config = { superblock ; sni = Domain_name.Host_map.empty } in
-      if Cstruct.length data > 0 then begin
+      if String.length data > 0 then begin
         let sni = Configuration.decode_data data in
         config.sni <- sni;
       end;
@@ -202,17 +202,20 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
       Lwt.return (Configuration.Result (1, "unexpected"))
 
   let handle_command block config data =
-    (match Configuration.cmd_of_cs data with
+    (match Configuration.cmd_of_str data with
      | Ok cmd -> handle_config block config cmd
      | Error `Msg err -> Lwt.return (Configuration.Result (2, err))) >|= fun reply ->
-    Configuration.cmd_to_cs reply
+    Configuration.cmd_to_str reply
 
-  module H = Mirage_crypto.Hash.SHA256
+  module H = Digestif.SHA256
 
   let auth key data =
-    if Cstruct.length data > H.digest_size then
-      let auth, data = Cstruct.split data H.digest_size in
-      if Cstruct.equal (H.hmac ~key data) auth then
+    if String.length data > H.digest_size then
+      let auth, data =
+        String.sub data 0 H.digest_size,
+        String.sub data H.digest_size (String.length data - H.digest_size)
+      in
+      if String.equal H.(to_raw_string (hmac_string ~key data)) auth then
         Some data
       else
         None
@@ -221,7 +224,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
 
   let config_cmd block config key data =
     match auth key data with
-    | None -> Lwt.return (Configuration.cmd_to_cs (Configuration.Result (3, "authentication failure")))
+    | None -> Lwt.return (Configuration.cmd_to_str (Configuration.Result (3, "authentication failure")))
     | Some data -> handle_command block config data
 
   let config_change block config key tcp =
@@ -234,13 +237,14 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
         Logs.warn (fun m -> m "config TCP read eof");
         Lwt.return_unit
       | Ok `Data buf ->
-        let buf' = Cstruct.shift buf 8 in
+        let buf' = Cstruct.to_string ~off:8 buf in
         let l = Cstruct.BE.get_uint64 buf 0 in
-        if Cstruct.length buf' = Int64.to_int l then
+        if String.length buf' = Int64.to_int l then
           config_cmd block config key buf' >>= fun res ->
-          let size = Cstruct.create 8 in
-          Cstruct.BE.set_uint64 size 0 (Int64.of_int (Cstruct.length res));
-          Private.TCP.write tcp (Cstruct.append size res) >|= function
+          let buf = Cstruct.create (8 + String.length res) in
+          Cstruct.BE.set_uint64 buf 0 (Int64.of_int (String.length res));
+          Cstruct.blit_from_string res 0 buf 8 (String.length res);
+          Private.TCP.write tcp buf >|= function
           | Ok () -> ()
           | Error e ->
             Logs.warn (fun m -> m "config TCP write error %a" Private.TCP.pp_write_error e)
@@ -447,7 +451,7 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
     =
     read_configuration block >>= fun config ->
     Private.TCP.listen (Private.tcp priv) ~port:configuration_port
-      (config_change block config (Cstruct.of_string key));
+      (config_change block config key);
     Public.TCP.listen (Public.tcp pub) ~port:80 redirect;
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
@@ -460,29 +464,31 @@ module Main (R : Mirage_random.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCL
           | Ok certificates -> Lwt.return (certificates :: acc))
         [] domains >>= fun cert_chains ->
       (match List.rev cert_chains with
-       | [] -> Lwt.fail_with "empty certificate chains"
+       | [] -> failwith "empty certificate chains"
        | a :: _ -> Lwt.return a) >>= fun first ->
       let certificates = `Multiple_default (first, cert_chains) in
-      let tls_config = Tls.Config.server ~certificates () in
-      let priv_tcp = Private.tcp priv in
-      Public.TCP.listen (Public.tcp pub) ~port:frontend_port (tls_accept priv_tcp config tls_config);
-      let now = Ptime.v (Pclock.now_d_ps ()) in
-      let seven_days_before_expire =
-        let next_expire =
-          let expiring =
-            List.map snd
-              (List.map X509.Certificate.validity
-                 (List.map (function (s::_, _) -> s | _ -> assert false)
-                      cert_chains))
+      match Tls.Config.server ~certificates () with
+      | Error `Msg msg -> failwith msg
+      | Ok tls_config ->
+        let priv_tcp = Private.tcp priv in
+        Public.TCP.listen (Public.tcp pub) ~port:frontend_port (tls_accept priv_tcp config tls_config);
+        let now = Ptime.v (Pclock.now_d_ps ()) in
+        let seven_days_before_expire =
+          let next_expire =
+            let expiring =
+              List.map snd
+                (List.map X509.Certificate.validity
+                   (List.map (function (s::_, _) -> s | _ -> assert false)
+                        cert_chains))
+            in
+            let diffs = List.map (fun exp -> Ptime.diff exp now) expiring in
+            let closest_span = List.hd (List.sort Ptime.Span.compare diffs) in
+            fst (Ptime.Span.to_d_ps closest_span)
           in
-          let diffs = List.map (fun exp -> Ptime.diff exp now) expiring in
-          let closest_span = List.hd (List.sort Ptime.Span.compare diffs) in
-          fst (Ptime.Span.to_d_ps closest_span)
+          max (Duration.of_hour 1) (Duration.of_day (max 0 (next_expire - 7)))
         in
-        max (Duration.of_hour 1) (Duration.of_day (max 0 (next_expire - 7)))
-      in
-      T.sleep_ns seven_days_before_expire >>= fun () ->
-      retrieve_certs ()
+        T.sleep_ns seven_days_before_expire >>= fun () ->
+        retrieve_certs ()
     in
     retrieve_certs ()
 end

@@ -1,4 +1,4 @@
 (executable
  (name client)
  (public_name tlstunnel-client)
- (libraries cmdliner logs.fmt fmt.cli logs.cli fmt.tty logs cstruct ipaddr asn1-combinators mirage-crypto))
+ (libraries cmdliner logs.fmt fmt.cli logs.cli fmt.tty logs ipaddr asn1-combinators digestif.c))

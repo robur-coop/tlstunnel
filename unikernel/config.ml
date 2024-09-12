@@ -1,4 +1,4 @@
-(* mirage >= 4.5.1 & < 4.6.0 *)
+(* mirage >= 4.7.0 & < 4.8.0 *)
 (* (c) 2019 Hannes Mehnert, all rights reserved *)
 
 open Mirage
@@ -38,7 +38,7 @@ let direct_tcpv4v6
   tcpv4v6_direct_conf id $ random $ clock $ time $ ip
 
 let net ?group name netif =
-  let ethernet = etif netif in
+  let ethernet = ethif netif in
   let arp = arp ethernet in
   let i4 = create_ipv4 ?group ethernet arp in
   let i6 = create_ipv6 ?group netif ethernet in

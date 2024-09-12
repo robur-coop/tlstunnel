@@ -31,11 +31,11 @@ let read fd =
     in
     let bl = Bytes.create 8 in
     let* () = r bl 8 in
-    let l = Cstruct.BE.get_uint64 (Cstruct.of_bytes bl) 0 in
+    let l = Bytes.get_int64_be bl 0 in
     let l_int = Int64.to_int l in (* TODO *)
     let b = Bytes.create l_int in
     let* () = r b l_int in
-    Ok (Cstruct.of_bytes b)
+    Ok (Bytes.unsafe_to_string b)
   with
     Unix.Unix_error (err, f, _) ->
     Logs.err (fun m -> m "Unix error in %s: %s" f (Unix.error_message err));
@@ -43,7 +43,7 @@ let read fd =
 
 let read_cmd fd =
   let* data = read fd in
-  Configuration.cmd_of_cs data
+  Configuration.cmd_of_str data
 
 let write fd data =
   try
@@ -54,21 +54,23 @@ let write fd data =
         let written = ign_intr (Unix.write fd b off) l in
         w b ~off:(written + off) (l - written)
     in
-    let csl = Cstruct.create 8 in
-    Cstruct.BE.set_uint64 csl 0 (Int64.of_int (Cstruct.length data));
-    w (Cstruct.to_bytes (Cstruct.append csl data)) (Cstruct.length data + 8);
+    let len = 8 + String.length data in
+    let csl = Bytes.create len in
+    Bytes.set_int64_be csl 0 (Int64.of_int (String.length data));
+    Bytes.blit_string data 0 csl 8 (String.length data);
+    w csl len;
     Ok ()
   with
     Unix.Unix_error (err, f, _) ->
     Logs.err (fun m -> m "Unix error in %s: %s" f (Unix.error_message err));
     Error (`Msg "unix error in write")
 
-module H = Mirage_crypto.Hash.SHA256
+module H = Digestif.SHA256
 
 let write_cmd fd key cmd =
-  let data = Configuration.cmd_to_cs cmd in
-  let auth = H.hmac ~key:(Cstruct.of_string key) data in
-  write fd (Cstruct.append auth data)
+  let data = Configuration.cmd_to_str cmd in
+  let auth = H.(to_raw_string (hmac_string ~key data)) in
+  write fd (auth ^ data)
 
 let write_read_print key remote cmd =
   let* s = connect remote in
