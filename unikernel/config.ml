@@ -1,13 +1,10 @@
-(* mirage >= 4.7.0 & < 4.8.0 *)
+(* mirage >= 4.8.0 & < 4.9.0 *)
 (* (c) 2019 Hannes Mehnert, all rights reserved *)
 
 open Mirage
 
-let setup = runtime_arg ~pos:__POS__ "Unikernel.K.setup"
-
 let main =
   main
-    ~runtime_args:[setup]
     ~packages:[
       package ~min:"0.14.0" "tls-mirage" ;
       package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
@@ -44,9 +41,7 @@ let net ?group name netif =
   let i6 = create_ipv6 ?group netif ethernet in
   let i4i6 = create_ipv4v6 ?group i4 i6 in
   let tcpv4v6 = direct_tcpv4v6 name i4i6 in
-  let ipv4_only = Runtime_arg.ipv4_only ?group () in
-  let ipv6_only = Runtime_arg.ipv6_only ?group () in
-  direct_stackv4v6 ~tcp:tcpv4v6 ~ipv4_only ~ipv6_only netif ethernet arp i4 i6
+  direct_stackv4v6 ?group ~tcp:tcpv4v6 netif ethernet arp i4 i6
 
 let use_utcp =
   let doc = Key.Arg.info ~doc:"Use uTCP" [ "use-utcp" ] in
