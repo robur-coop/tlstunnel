@@ -14,7 +14,9 @@ module K = struct
        Domain_name.pp)
 
   let key_v =
-    Arg.conv ~docv:"HOST:HASH:DATA" Dns.Dnskey.(name_key_of_string, pp_name_key)
+    Arg.conv ~docv:"HOST:HASH:DATA"
+      Dns.Dnskey.(name_key_of_string,
+                  (fun ppf v -> Fmt.string ppf (name_key_to_string v)))
 
   let frontend_port =
     let doc = Arg.info ~doc:"The TCP port of the frontend." ["frontend-port"] in
@@ -432,10 +434,11 @@ module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirag
     Private.TCP.listen (Private.tcp priv) ~port:(K.configuration_port ())
       (config_change block config (K.key ()));
     Public.TCP.listen (Public.tcp pub) ~port:80 redirect;
+    let dns_key_name, dns_key = K.dns_key () in
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
           let key_seed = Domain_name.to_string domain ^ ":" ^ (K.key_seed ()) in
-          D.retrieve_certificate pub ~dns_key:(Fmt.to_to_string Dns.Dnskey.pp_name_key (K.dns_key ()))
+          D.retrieve_certificate pub ~dns_key_name dns_key
             ~hostname:domain
             ~additional_hostnames:[ Domain_name.(append_exn (of_string_exn "*") domain) ]
             ~key_seed (K.dns_server ()) 53 >>= function

@@ -7,7 +7,7 @@ let main =
   main
     ~packages:[
       package ~min:"0.14.0" "tls-mirage" ;
-      package ~min:"5.0.1" ~sublibs:["mirage"] "dns-certify" ;
+      package ~min:"9.1.0" ~sublibs:["mirage"] "dns-certify" ;
       package ~min:"6.0.0" "cstruct" ;
       package ~min:"7.0.0" "tcpip" ;
       package "metrics";
