@@ -50,7 +50,7 @@ end
 
 open Lwt.Infix
 
-module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
+module Main (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpip.Stack.V4V6) = struct
   let snis =
     let create ~f =
       let data : (string, int) Hashtbl.t = Hashtbl.create 7 in
@@ -101,7 +101,7 @@ module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirag
   let http_access = access "http"
   let backend_access = access "backend"
 
-  module FS = Filesystem.Make(Pclock)(Block)
+  module FS = Filesystem.Make(Block)
 
   type config = {
     mutable superblock : FS.superblock ;
@@ -427,18 +427,17 @@ module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirag
         Logs.warn (fun m -> m "unexpected error retrieving the TLS session");
         close ()
 
-  module D = Dns_certify_mirage.Make(R)(Pclock)(T)(Public)
+  module D = Dns_certify_mirage.Make(Public)
 
-  let start _ () () block pub priv =
+  let start block pub priv =
     read_configuration block >>= fun config ->
     Private.TCP.listen (Private.tcp priv) ~port:(K.configuration_port ())
       (config_change block config (K.key ()));
     Public.TCP.listen (Public.tcp pub) ~port:80 redirect;
-    let dns_key_name, dns_key = K.dns_key () in
     let rec retrieve_certs () =
       Lwt_list.fold_left_s (fun acc domain ->
           let key_seed = Domain_name.to_string domain ^ ":" ^ (K.key_seed ()) in
-          D.retrieve_certificate pub ~dns_key_name dns_key
+          D.retrieve_certificate pub (K.dns_key ())
             ~hostname:domain
             ~additional_hostnames:[ Domain_name.(append_exn (of_string_exn "*") domain) ]
             ~key_seed (K.dns_server ()) 53 >>= function
@@ -454,7 +453,7 @@ module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirag
       | Ok tls_config ->
         let priv_tcp = Private.tcp priv in
         Public.TCP.listen (Public.tcp pub) ~port:(K.frontend_port ()) (tls_accept priv_tcp config tls_config);
-        let now = Ptime.v (Pclock.now_d_ps ()) in
+        let now = Mirage_ptime.now () in
         let seven_days_before_expire =
           let next_expire =
             let expiring =
@@ -469,7 +468,7 @@ module Main (R : Mirage_crypto_rng_mirage.S) (T : Mirage_time.S) (Pclock : Mirag
           in
           max (Duration.of_hour 1) (Duration.of_day (max 0 (next_expire - 7)))
         in
-        T.sleep_ns seven_days_before_expire >>= fun () ->
+        Mirage_sleep.ns seven_days_before_expire >>= fun () ->
         retrieve_certs ()
     in
     retrieve_certs ()

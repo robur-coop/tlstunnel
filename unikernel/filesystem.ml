@@ -1,4 +1,4 @@
-module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
+module Make (Block : Mirage_block.S) = struct
   module H = Digestif.SHA256
 
   let s_version = 1
@@ -23,7 +23,7 @@ module Make (Pclock : Mirage_clock.PCLOCK) (Block : Mirage_block.S) = struct
   let empty_superblock () = {
     super_version = s_version ;
     super_counter = 0 ;
-    timestamp = Ptime.v (Pclock.now_d_ps ()) ;
+    timestamp = Mirage_ptime.now () ;
     active_sector = 0L ;
     data_length = 0 ;
     data_checksum = "" ;
