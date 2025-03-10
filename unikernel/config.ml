@@ -1,4 +1,4 @@
-(* mirage >= 4.8.0 & < 4.9.0 *)
+(* mirage >= 4.9.0 & < 4.10.0 *)
 (* (c) 2019 Hannes Mehnert, all rights reserved *)
 
 open Mirage
@@ -7,32 +7,29 @@ let main =
   main
     ~packages:[
       package ~min:"0.14.0" "tls-mirage" ;
-      package ~min:"9.1.0" ~sublibs:["mirage"] "dns-certify" ;
+      package ~min:"10.0.0" ~sublibs:["mirage"] "dns-certify" ;
       package ~min:"6.0.0" "cstruct" ;
       package ~min:"7.0.0" "tcpip" ;
       package "metrics";
       package ~min:"4.5.0" ~sublibs:["network"] "mirage-runtime";
     ]
     "Unikernel.Main"
-    (random @-> time @-> pclock @-> block @-> stackv4v6 @-> stackv4v6 @-> job)
+    (block @-> stackv4v6 @-> stackv4v6 @-> job)
 
 (* uTCP *)
 
 let tcpv4v6_direct_conf id =
   let packages_v = Key.pure [ package "utcp" ~sublibs:[ "mirage" ] ] in
   let connect _ modname = function
-    | [_random; _mclock; _time; ip] ->
+    | [ip] ->
       code ~pos:__POS__ "Lwt.return (%s.connect %S %s)" modname id ip
     | _ -> failwith "direct tcpv4v6"
   in
   impl ~packages_v ~connect "Utcp_mirage.Make"
-    (random @-> mclock @-> time @-> ipv4v6 @-> (tcp: 'a tcp typ))
+    (ipv4v6 @-> (tcp: 'a tcp typ))
 
-let direct_tcpv4v6
-    ?(clock=default_monotonic_clock)
-    ?(random=default_random)
-    ?(time=default_time) id ip =
-  tcpv4v6_direct_conf id $ random $ clock $ time $ ip
+let direct_tcpv4v6 id ip =
+  tcpv4v6_direct_conf id $ ip
 
 let net ?group name netif =
   let ethernet = ethif netif in
@@ -88,7 +85,7 @@ let name =
 let monitoring =
   let monitor = Runtime_arg.(v (monitor None)) in
   let connect _ modname = function
-    | [ _ ; _ ; stack ; name ; monitor ] ->
+    | [ stack ; name ; monitor ] ->
       code ~pos:__POS__
         "Lwt.return (match %s with\
          | None -> Logs.warn (fun m -> m \"no monitor specified, not outputting statistics\")\
@@ -97,15 +94,15 @@ let monitoring =
     | _ -> assert false
   in
   impl
-    ~packages:[ package "mirage-monitoring" ]
+    ~packages:[ package ~min:"0.0.6" "mirage-monitoring" ]
     ~runtime_args:[ name ; monitor ]
     ~connect "Mirage_monitoring.Make"
-    (time @-> pclock @-> stackv4v6 @-> job)
+    (stackv4v6 @-> job)
 
 let syslog =
   let syslog = Runtime_arg.(v (syslog None)) in
   let connect _ modname = function
-    | [ _ ; stack ; name ; syslog ] ->
+    | [ stack ; name ; syslog ] ->
       code ~pos:__POS__
         "Lwt.return (match %s with\
          | None -> Logs.warn (fun m -> m \"no syslog specified, dumping on stdout\")\
@@ -114,25 +111,25 @@ let syslog =
     | _ -> assert false
   in
   impl
-    ~packages:[ package ~sublibs:["mirage"] ~min:"0.4.0" "logs-syslog" ]
+    ~packages:[ package ~sublibs:["mirage"] ~min:"0.5.0" "logs-syslog" ]
     ~runtime_args:[ name ; syslog ]
     ~connect "Logs_syslog_mirage.Udp"
-    (pclock @-> stackv4v6 @-> job)
+    (stackv4v6 @-> job)
 
-let optional_monitoring time pclock stack =
+let optional_monitoring stack =
   if_impl (Key.value enable_monitoring)
-    (monitoring $ time $ pclock $ stack)
+    (monitoring $ stack)
     noop
 
-let optional_syslog pclock stack =
+let optional_syslog stack =
   if_impl (Key.value enable_monitoring)
-    (syslog $ pclock $ stack)
+    (syslog $ stack)
     noop
 
 let () =
   register "tlstunnel"
     [
-      optional_syslog default_posix_clock management_stack ;
-      optional_monitoring default_time default_posix_clock management_stack ;
-      main $ default_random $ default_time $ default_posix_clock $ block $ stack $ private_stack
+      optional_syslog management_stack ;
+      optional_monitoring management_stack ;
+      main $ block $ stack $ private_stack
     ]
