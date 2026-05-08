@@ -1,4 +1,4 @@
-(* mirage >= 4.10.0 & < 4.11.0 *)
+(* mirage >= 4.11.0 & < 4.12.0 *)
 (* (c) 2019 Hannes Mehnert, all rights reserved *)
 
 open Mirage
@@ -16,45 +16,10 @@ let main =
     "Unikernel.Main"
     (block @-> stackv4v6 @-> stackv4v6 @-> job)
 
-(* uTCP *)
-
-let tcpv4v6_direct_conf id =
-  let packages_v = Key.pure [ package "utcp" ~sublibs:[ "mirage" ] ] in
-  let connect _ modname = function
-    | [ip] ->
-      code ~pos:__POS__ "Lwt.return (%s.connect %S %s)" modname id ip
-    | _ -> failwith "direct tcpv4v6"
-  in
-  impl ~packages_v ~connect "Utcp_mirage.Make"
-    (ipv4v6 @-> (tcp: 'a tcp typ))
-
-let direct_tcpv4v6 id ip =
-  tcpv4v6_direct_conf id $ ip
-
-let net ?group name netif =
-  let ethernet = ethif netif in
-  let arp = arp ethernet in
-  let i4 = create_ipv4 ?group ethernet arp in
-  let i6 = create_ipv6 ?group netif ethernet in
-  let i4i6 = create_ipv4v6 ?group i4 i6 in
-  let tcpv4v6 = direct_tcpv4v6 name i4i6 in
-  direct_stackv4v6 ?group ~tcp:tcpv4v6 netif ethernet arp i4 i6
-
-let use_utcp =
-  let doc = Key.Arg.info ~doc:"Use uTCP" [ "use-utcp" ] in
-  Key.(create "use-utcp" Arg.(flag doc))
-
-let stack =
-  if_impl
-    (Key.value use_utcp)
-    (net "service" default_network)
-    (generic_stackv4v6 default_network)
+let stack = generic_stackv4v6 default_network
 
 let private_stack =
-  if_impl
-    (Key.value use_utcp)
-    (net ~group:"private" "private" (netif ~group:"private" "private"))
-    (generic_stackv4v6 ~group:"private" (netif ~group:"private" "private"))
+  generic_stackv4v6 ~group:"private" (netif ~group:"private" "private")
 
 let block =
   Key.(if_impl is_solo5 (block_of_file "storage") (block_of_file "disk.img"))
@@ -69,10 +34,7 @@ let enable_monitoring =
 let management_stack =
   if_impl
     (Key.value enable_monitoring)
-    (if_impl
-       (Key.value use_utcp)
-       (net ~group:"management" "management" (netif ~group:"management" "management"))
-       (generic_stackv4v6 ~group:"management" (netif ~group:"management" "management")))
+    (generic_stackv4v6 ~group:"management" (netif ~group:"management" "management"))
     stack
 
 let monitoring =
