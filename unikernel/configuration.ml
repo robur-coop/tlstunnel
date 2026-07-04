@@ -58,7 +58,13 @@ let decode_data data =
   | Ok snis ->
     List.fold_left
       (fun acc (sni, host, port) ->
-         Domain_name.Host_map.add sni (host, port) acc)
+         match Domain_name.Host_map.mem sni acc with 
+         | true -> 
+          let entry = Option.fold ~none:[] ~some:(fun x -> x)
+          (Domain_name.Host_map.find_opt sni acc) in 
+          let ips = (host,port) :: entry in 
+          Domain_name.Host_map.add sni ips acc
+         | false -> Domain_name.Host_map.add sni [(host, port)] acc)
       Domain_name.Host_map.empty snis
   | Error `Msg msg ->
     Logs.err (fun m -> m "error %s decoding data" msg);
@@ -67,28 +73,40 @@ let decode_data data =
 let encode_data sni =
   let snis =
     Domain_name.Host_map.fold
-      (fun sni (host, port) acc -> (sni, host, port) :: acc)
+      (fun sni addresses acc -> 
+        List.map (fun (ip, port) -> (sni, ip, port)) addresses @ acc)
       sni []
   in
   data_to_cs snis
 
 let add_sni snis (sni, host, port) =
-  (match Domain_name.Host_map.find_opt sni snis with
-   | None -> ()
-   | Some (ohost, oport) ->
-     Logs.warn (fun m -> m "overwriting %a -> %a:%d with %a:%d"
-                   Domain_name.pp sni Ipaddr.pp ohost oport Ipaddr.pp host port));
-  Logs.info (fun m -> m "%a is now redirected to %a:%d"
-                Domain_name.pp sni Ipaddr.pp host port);
-  Domain_name.Host_map.add sni (host, port) snis
+  match Domain_name.Host_map.find_opt sni snis with
+   | None -> 
+    Domain_name.Host_map.add sni [(host, port)] snis
+   | Some entries ->
+     Logs.info (fun m -> m "adding new ip for %a %a:%d"
+                   Domain_name.pp sni Ipaddr.pp host port);
+     Domain_name.Host_map.add sni ((host, port) :: entries) snis
 
 let remove_sni snis sni =
   Logs.info (fun m -> m "%a is no longer redirected" Domain_name.pp sni);
   Domain_name.Host_map.remove sni snis
 
+let remove_ip_from_sni snis (sni, host, port) =
+  Logs.info (fun m -> m "%a is no longer redirected" Domain_name.pp sni);
+  match Domain_name.Host_map.find_opt sni snis with
+  | None -> snis
+  | Some entries ->
+    let new_entries = List.filter (fun (h, p) -> h <> host || p <> port) entries in
+    if new_entries = [] then
+      Domain_name.Host_map.remove sni snis
+    else
+      Domain_name.Host_map.add sni new_entries snis
+
 type cmd =
   | Add of [`host] Domain_name.t * Ipaddr.t * int
-  | Remove of [`host] Domain_name.t
+  | Remove_all of [`host] Domain_name.t
+  | Remove of [`host] Domain_name.t * Ipaddr.t * int
   | List
   | Snis of ([`host] Domain_name.t * Ipaddr.t * int) list
   | Result of int * string
@@ -98,7 +116,8 @@ let pp_one ppf (sni, host, port) =
 
 let pp_cmd ppf = function
   | Add (s, h, p) -> Fmt.pf ppf "adding %a" pp_one (s, h, p)
-  | Remove sni -> Fmt.pf ppf "removing %a" Domain_name.pp sni
+  | Remove_all sni -> Fmt.pf ppf "removing the domain %a" Domain_name.pp sni
+  | Remove (sni, h, p) -> Fmt.pf ppf "removing the ip from %a" pp_one (sni, h, p)
   | List -> Fmt.string ppf "list"
   | Snis xs -> Fmt.(list ~sep:(any ";@ ") pp_one) ppf xs
   | Result (c, msg) -> Fmt.pf ppf "exited %d: %s" c msg
@@ -106,24 +125,27 @@ let pp_cmd ppf = function
 let cmd =
   let f = function
     | `C1 (s, h, p) -> Add (s, h, p)
-    | `C2 s -> Remove Domain_name.(host_exn (of_string_exn s))
-    | `C3 () -> List
-    | `C4 xs -> Snis xs
-    | `C5 (c, s) -> Result (c, s)
+    | `C2 s -> Remove_all Domain_name.(host_exn (of_string_exn s))
+    | `C3 (s, h, p) -> Remove (s, h, p)
+    | `C4 () -> List
+    | `C5 xs -> Snis xs
+    | `C6 (c, s) -> Result (c, s)
   and g = function
     | Add (s, h, p) -> `C1 (s, h, p)
-    | Remove s -> `C2 (Domain_name.to_string s)
-    | List -> `C3 ()
-    | Snis xs -> `C4 xs
-    | Result (c, s) -> `C5 (c, s)
+    | Remove_all s -> `C2 (Domain_name.to_string s)
+    | Remove (s, h, p) -> `C3 (s, h, p)
+    | List -> `C4 ()
+    | Snis xs -> `C5 xs
+    | Result (c, s) -> `C6 (c, s)
   in
   Asn.S.(map f g
-           (choice5
+           (choice6
               (explicit 0 sni)
               (explicit 1 utf8_string)
-              (explicit 2 null)
-              (explicit 3 (sequence_of sni))
-              (explicit 4 (sequence2
+              (explicit 2 sni)
+              (explicit 3 null)
+              (explicit 4 (sequence_of sni))
+              (explicit 5 (sequence2
                              (required ~label:"exit" int)
                              (required ~label:"message" utf8_string)))))
 

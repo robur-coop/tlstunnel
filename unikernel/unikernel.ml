@@ -105,7 +105,7 @@ module Main (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpi
 
   type config = {
     mutable superblock : FS.superblock ;
-    mutable sni : (Ipaddr.t * int) Domain_name.Host_map.t ;
+    mutable sni : (Ipaddr.t * int) list Domain_name.Host_map.t ;
   }
 
   let read_configuration block =
@@ -159,7 +159,7 @@ module Main (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpi
           let msg = Format.asprintf "error %s adding %a" m Domain_name.pp sni in
           Configuration.Result (1, msg)
       end
-    | Configuration.Remove sni ->
+    | Configuration.Remove_all sni ->
       begin
         let snis = Configuration.remove_sni config.sni sni in
         config.sni <- snis;
@@ -175,10 +175,28 @@ module Main (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpi
           in
           Configuration.Result (1, msg)
       end
+    | Configuration.Remove (sni, host, port) ->
+      begin
+        let snis = Configuration.remove_ip_from_sni config.sni (sni, host, port) in
+        config.sni <- snis;
+        write_configuration block config >|= function
+        | Ok () ->
+          let msg =
+            Format.asprintf "%a:%u removed from %a successfully" Ipaddr.pp host port Domain_name.pp sni 
+          in
+          Configuration.Result (0, msg)
+        | Error `Msg m ->
+          let msg =
+            Format.asprintf "error %s removing %a" m Domain_name.pp sni
+          in
+          Configuration.Result (1, msg)
+      end
     | Configuration.List ->
       let snis =
         Domain_name.Host_map.fold
-          (fun sni (host, port) acc -> (sni, host, port) :: acc)
+          (fun sni entries acc ->
+             List.map (fun (host, port) -> (sni, host, port)) entries @ acc
+          )
           config.sni []
       in
       Lwt.return (Configuration.Snis snis)
@@ -383,13 +401,13 @@ module Main (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpi
             | Some sni ->
               let r =
                 match Domain_name.Host_map.find_opt sni config.sni with
-                | None ->
+                | Some entries when entries <> [] ->
+                  snis (Domain_name.to_string sni);
+                  Some entries
+                | None | Some _ ->
                   Logs.warn (fun m -> m "server name %a not configured"
                                 Domain_name.pp sni);
                   default ()
-                | Some (host, port) ->
-                  snis (Domain_name.to_string sni);
-                  Some (host, port)
               in
               r, Domain_name.to_string sni
           in
@@ -402,7 +420,9 @@ module Main (Block : Mirage_block.S) (Public : Tcpip.Stack.V4V6) (Private : Tcpi
             in
             TLS.write tls_flow (Cstruct.of_string reply) >>= fun _ ->
             close ()
-          | Some (host, port) ->
+          | Some entries ->
+            (* TODO: use happy-eyeballs to determine the fastest ip:port to connect and route the connection to it. *)
+            let (host,port) = List.hd entries in
             Private.TCP.create_connection priv (host, port) >>= function
             | Error e ->
               Logs.err (fun m -> m "error %a connecting to backend"

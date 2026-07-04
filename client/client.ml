@@ -86,8 +86,11 @@ let list () key remote =
 let add () key remote sni host port =
   write_read_print key remote (Configuration.Add (sni, host, port))
 
-let remove () key remote sni =
-  write_read_print key remote (Configuration.Remove sni)
+let remove_all () key remote sni =
+  write_read_print key remote (Configuration.Remove_all sni)
+
+let remove () key remote sni host port =
+  write_read_print key remote (Configuration.Remove (sni, host, port))
 
 let help () man_format cmds = function
   | None -> `Help (`Pager, None)
@@ -172,13 +175,19 @@ let add_cmd =
   in
   Cmd.(v (info "add") term)
 
+let remove_all_cmd =
+  let term =
+    Term.(term_result (const remove_all $ setup_log $ key $ remote $ sni))
+  in
+  Cmd.(v (info "remove-all") term)
+
 let remove_cmd =
   let term =
-    Term.(term_result (const remove $ setup_log $ key $ remote $ sni))
+    Term.(term_result (const remove $ setup_log $ key $ remote $ sni $ ip $ port))
   in
   Cmd.(v (info "remove") term)
 
-let cmds = [ list_cmd ; add_cmd ; remove_cmd ]
+let cmds = [ list_cmd ; add_cmd ; remove_all_cmd ; remove_cmd ]
 
 let () =
   let info =
