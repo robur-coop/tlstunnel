@@ -109,14 +109,16 @@ let host_port : (Unix.inet_addr * int) Arg.conv =
     match String.split_on_char ':' s with
     | [ hostname ;  port ] ->
       begin try
-          `Ok (Unix.inet_addr_of_string hostname, int_of_string port)
+          Ok (Unix.inet_addr_of_string hostname, int_of_string port)
         with
-          Not_found -> `Error "failed to parse IP:port"
+          Not_found -> Error (`Msg "failed to parse IP:port")
       end
-    | _ -> `Error "broken: no port specified"
+    | _ -> Error (`Msg "broken: no port specified")
   in
-  parse, fun ppf (h, p) -> Format.fprintf ppf "%s:%d"
+  let pp = fun ppf (h, p) -> Format.fprintf ppf "%s:%d"
       (Unix.string_of_inet_addr h) p
+  in
+  Arg.conv (parse, pp)
 
 let remote =
   let doc = "The remote host:port to connect to" in
@@ -129,13 +131,9 @@ let key =
 
 let hn : [`host] Domain_name.t Arg.conv =
   let parse s =
-    match Domain_name.of_string s with
-    | Error `Msg m -> `Error m
-    | Ok d -> match Domain_name.host d with
-      | Error `Msg m -> `Error m
-      | Ok h -> `Ok h
+    Result.bind (Domain_name.of_string s) Domain_name.host
   in
-  parse, Domain_name.pp
+  Arg.conv (parse, Domain_name.pp)
 
 let sni =
   let doc = "The SNI." in
@@ -151,12 +149,7 @@ let list_cmd =
   Cmd.(v (info "list") term)
 
 let ip_conv : Ipaddr.t Arg.conv =
-  let parse s =
-    match Ipaddr.of_string  s with
-    | Ok ip -> `Ok ip
-    | Error `Msg msg -> `Error msg
-  in
-  parse, Ipaddr.pp
+  Arg.conv (Ipaddr.of_string, Ipaddr.pp)
 
 let ip =
   let doc = "The IP address." in
